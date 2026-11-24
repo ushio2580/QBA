@@ -18,6 +18,8 @@ Initial entries describe agreed product direction / proposed defaults, not verif
 - DEC-010 (observed discrepancy): lockfile is present even though README describes absence; verify documentation against current HEAD. Do not infer test success from lockfile.
 - DEC-011 (confirmed checkpoint, 2026-11-24): the bracket API emits dense round arrays and the client normalizes malformed/null rounds. The current unit suite covers serialization and null normalization; the Socket.IO integration regression remains unverified in this execution environment.
 - DEC-012 (confirmed checkpoint, 2026-11-24): dash and shield use discrete `game:action` events with server-side cooldown validation and state feedback. Preserve authoritative validation; end-to-end behavior still needs a real Socket.IO test.
+- DEC-013 (confirmed fix, 2026-11-24): validate production `SESSION_SECRET` before opening or mutating SQLite. Reject missing, blank, short and known placeholder values; preserve configured bytes so a deployment does not rotate existing sessions. Keep the development fallback only outside production. Evidence: `node test/config.test.js` passes 5/5; the live Render setting still needs a safe manual check.
+- DEC-014 (user-approved workflow, 2026-11-24): test and stabilize a complete local two-player match before testing the online deployment. A report of an intermittent post-answer freeze and Player 2 movement failure must be reproduced locally before changing the game loop or deploying a speculative fix.
 
 ## New entry template
 ### DEC-XXX — Title

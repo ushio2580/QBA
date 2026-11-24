@@ -38,13 +38,14 @@ The gate matrix records the latest known result; checks without evidence remain 
 ## Regression cases added after public source review (all NOT RUN)
 | ID | Related | Case | Result |
 |---|---|---|---|
-| QA23 | BUG-001 | Production missing/default/short secret fails startup; valid unique secret passes. | FAIL (missing secret passed guard; see current evidence) |
+| QA23 | BUG-001 | Production missing/blank/default/short secret fails before SQLite opens; valid 32+ character secret passes without rewriting; development fallback remains available. | PASS (`node test/config.test.js`, 5/5) |
 | QA24 | BUG-002 | Equal simultaneous deaths and exhausted sudden death: fair rule, invariant under slot/name swap. | NOT RUN |
 | QA25 | BUG-003 | Pause during inter-round rest freezes advancement; resume advances once; close cancels progression. | NOT RUN |
 | QA26 | P15/P20 | Audit spectator role switching, room membership, answer-related data leakage. | NOT RUN |
 | QA27 | P19/P20 | Inspect committed ZIP contents safely for secrets, DBs and unnecessary binaries; no extraction into working tree. | PARTIAL (file list only; no `.env` or database paths listed) |
 | QA28 | P13 | Bracket rounds are dense and client ignores sparse null rounds/malformed player arrays. | PASS (`node test/core.test.js`) |
 | QA29 | P07/P11/P13 | Two real sockets verify bracket state, rival sync, server movement, dash and shield acknowledgements. | BLOCKED (test server cannot bind in audit environment) |
+| QA30 | P07/P09/P11 | With a two-question match, resolve Q1 and verify both players receive Q2 active state and can move authoritatively; record phase, lock and socket status if either freezes. | BLOCKED (scenario added to `test/multiplayer.integration.test.js`, but this environment cannot bind the local server; run in WSL) |
 
 ## Audit execution evidence — 2026-11-24
 
@@ -63,3 +64,16 @@ Baseline: `d7b2339c84d47060b3f39ac6d03d3f254e4e4a64`; Node `v22.22.1`; npm `9.2.
 | Browser/physical devices/Render/load | NOT RUN | No browser framework or device run; no Render dashboard or production settings were accessed; no load run. |
 
 The integration test's SQLite path is isolated in a temporary directory and its test credentials are synthetic. Its child stdout/stderr are suppressed, its port is randomly selected from a fixed range, and cleanup waits a fixed 300 ms after SIGTERM; see BUG-007. No production DB, secrets, deployment, or user data were accessed.
+
+## BUG-001 follow-up — 2026-11-24
+
+Baseline: `b226721a7d1887c2bc0c96f91446d6fe4b84acf9`.
+
+| Command/check | Result | Evidence |
+|---|---|---|
+| `node test/config.test.js` | PASS | 5/5; rejects absent/blank/short/placeholders, accepts a 32-character value and preserves configured bytes, keeps the development fallback, and verifies production exits before creating SQLite. |
+| `node test/core.test.js` | PASS | 7/7 existing regressions. |
+| `npm run build` | PASS_WITH_WARNING | Production build succeeds; existing large JavaScript chunk warning remains. |
+| `node test/multiplayer.integration.test.js` | FAIL / BLOCKED | Updated two-question case does not reach its assertions; startup health wait fails with `QBA server did not become healthy.` Prior isolated audit confirmed local bind denial (`EPERM`). Rerun in WSL. |
+
+Render's live `SESSION_SECRET` was not inspected. Verify that it exists without exposing its value before deploying; live-host configuration remains unverified.

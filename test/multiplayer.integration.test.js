@@ -32,6 +32,27 @@ async function post(url,body,cookie){
   const response=await fetch(`${base}${url}`,{method:'POST',headers:{'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:JSON.stringify(body)});
   const data=await response.json();if(!response.ok)throw new Error(data.error||`POST ${url} failed`);return {data,response};
 }
+const inputSequences=new WeakMap();
+function sendInput(socket,x,y){
+  const seq=(inputSequences.get(socket)||0)+1;inputSequences.set(socket,seq);
+  socket.emit('game:input',{x,y,seq});
+}
+async function moveToAnswer(socket,getState,answerIndex){
+  const locked=eventOnce(socket,'game:state',state=>state.phase==='ACTIVE'&&state.self?.locked===true,9000);
+  const timer=setInterval(()=>{
+    const state=getState(),zone=state?.zones?.[answerIndex];
+    if(state?.phase!=='ACTIVE'||state.self?.locked||!zone)return;
+    const dx=zone.x-state.self.x,dy=zone.y-state.self.y,mag=Math.hypot(dx,dy)||1;
+    sendInput(socket,dx/mag,dy/mag);
+  },50);
+  try{return await locked;}finally{clearInterval(timer);}
+}
+async function verifyMovement(socket,state){
+  const startX=state.self.x,direction=startX<480?1:-1;
+  const moved=eventOnce(socket,'game:state',next=>next.phase==='ACTIVE'&&next.questionNumber===2&&direction*(next.self.x-startX)>12,5000);
+  for(let i=0;i<8;i++)sendInput(socket,direction,0);
+  return moved;
+}
 
 test('two independent Socket.IO players receive a server-run Survival Quiz arena', {timeout:30000}, async t=>{
   const sockets=[];
@@ -45,8 +66,11 @@ test('two independent Socket.IO players receive a server-run Survival Quiz arena
   const registered=await post('/api/auth/register',{email:'host@example.test',password:'long-test-password',displayName:'Test Host'});
   const cookie=registered.response.headers.get('set-cookie')?.split(';')[0];
   assert.ok(cookie,'host session cookie is issued');
-  const quiz=await post('/api/quizzes',{title:'Socket test',description:'',questions:[{question:'Which answer is correct?',answers:['A','B','C','D'],correctAnswerIndex:2,timeLimit:12,wrongAnswerDamage:20,correctAnswerReward:10}]},cookie);
-  const room=await post('/api/tournaments',{quizId:quiz.data.id,settings:{questionsPerMatch:1,readingSeconds:0,answerSeconds:12,feedbackSeconds:2,antiCopy:true}},cookie);
+  const quiz=await post('/api/quizzes',{title:'Socket test',description:'',questions:[
+    {question:'Which answer is correct?',answers:['A','B','C','D'],correctAnswerIndex:2,timeLimit:12,wrongAnswerDamage:20,correctAnswerReward:10},
+    {question:'Which answer comes second?',answers:['A','B','C','D'],correctAnswerIndex:1,timeLimit:12,wrongAnswerDamage:20,correctAnswerReward:10}
+  ]},cookie);
+  const room=await post('/api/tournaments',{quizId:quiz.data.id,settings:{questionsPerMatch:2,readingSeconds:0,answerSeconds:12,feedbackSeconds:2,antiCopy:true,randomQuestions:false,randomAnswers:false}},cookie);
   const first=await post('/api/join',{publicId:room.data.publicId,nickname:'Player One',character:'bot'});
   const second=await post('/api/join',{publicId:room.data.publicId,nickname:'Player Two',character:'ninja'});
   const host=connect(base,{transports:['websocket'],extraHeaders:{Cookie:cookie}});sockets.push(host);
@@ -55,6 +79,8 @@ test('two independent Socket.IO players receive a server-run Survival Quiz arena
   await hostLobby;
   const a=connect(base,{transports:['websocket'],auth:{token:first.data.token}});sockets.push(a);
   const b=connect(base,{transports:['websocket'],auth:{token:second.data.token}});sockets.push(b);
+  let latestA=null,latestB=null;
+  a.on('game:state',state=>{latestA=state;});b.on('game:state',state=>{latestB=state;});
   const readyA=eventOnce(a,'player:ready');const readyB=eventOnce(b,'player:ready');
   a.on('connect',()=>a.emit('player:attach',{token:first.data.token}));
   b.on('connect',()=>b.emit('player:attach',{token:second.data.token}));
@@ -84,7 +110,27 @@ test('two independent Socket.IO players receive a server-run Survival Quiz arena
   const shielded=await shieldState;
   assert.equal(shielded.self.abilityReady,false,'shield activation and cooldown are confirmed by the server');
   const startX=aState.self.x;
-  for(let seq=1;seq<=6;seq++)a.emit('game:input',{x:1,y:0,seq});
+  for(let i=0;i<6;i++)sendInput(a,1,0);
   const moved=await eventOnce(a,'game:state',state=>state.phase==='ACTIVE'&&state.self.x>startX+12);
   assert.ok(moved.self.x>startX,'the server applied movement intentions to authoritative position');
+
+  const feedbackA=eventOnce(a,'game:state',state=>state.phase==='FEEDBACK'&&state.questionNumber===1);
+  const [lockedA,lockedB,feedback]=await Promise.all([
+    moveToAnswer(a,()=>latestA,2),
+    moveToAnswer(b,()=>latestB,2),
+    feedbackA
+  ]);
+  assert.equal(lockedA.self.locked,true,'Player 1 can lock the correct answer');
+  assert.equal(lockedB.self.locked,true,'Player 2 can lock the correct answer');
+  assert.equal(feedback.feedback.correctAnswerIndex,2,'the server resolves Q1 after both players answer');
+  assert.ok(feedback.feedback.outcome.every(player=>player.correct),'both independent clients receive a correct Q1 outcome');
+
+  const secondQuestionA=eventOnce(a,'game:state',state=>state.phase==='ACTIVE'&&state.questionNumber===2&&Boolean(state.question),9000);
+  const secondQuestionB=eventOnce(b,'game:state',state=>state.phase==='ACTIVE'&&state.questionNumber===2&&Boolean(state.question),9000);
+  const [stateA2,stateB2]=await Promise.all([secondQuestionA,secondQuestionB]);
+  assert.equal(stateA2.question.question,'Which answer comes second?');
+  assert.equal(stateB2.question.question,'Which answer comes second?');
+  const [movedA2,movedB2]=await Promise.all([verifyMovement(a,stateA2),verifyMovement(b,stateB2)]);
+  assert.notEqual(movedA2.self.x,stateA2.self.x,'Player 1 moves authoritatively after Q1 resolution');
+  assert.notEqual(movedB2.self.x,stateB2.self.x,'Player 2 moves authoritatively after Q1 resolution');
 });

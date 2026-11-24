@@ -11,6 +11,10 @@ import rateLimit from 'express-rate-limit';
 import QRCode from 'qrcode';
 import { Server } from 'socket.io';
 import { CHARACTERS, validateQuestion, validateQuiz, pairPlayers, comparePlayers, publicQuestion, buildBracketRounds } from './core.js';
+import { resolveSessionSecret } from './config.js';
+
+// Validate production configuration before opening or changing the database.
+const SESSION_SECRET = resolveSessionSecret();
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dbFile = path.resolve(process.env.DATABASE_PATH || path.join(root, 'data/qba.sqlite'));
@@ -37,8 +41,6 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
 const COOKIE = 'qba_session';
 const SESSION_MS = 14 * 24 * 60 * 60 * 1000;
-const SESSION_SECRET = process.env.SESSION_SECRET || 'development-only-qba-session-secret-change-me';
-if(process.env.NODE_ENV==='production'&&SESSION_SECRET.length<32)throw new Error('Set SESSION_SECRET to at least 32 characters in production.');
 const tournaments = new Map();
 const playerTokenIndex = new Map();
 const socketInputTimes = new Map();

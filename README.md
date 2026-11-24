@@ -57,7 +57,7 @@ For production-style local serving, run `npm run build` followed by `npm start`.
 
 SQLite opens at `DATABASE_PATH`, defaulting to `./data/qba.sqlite`. On startup, the service applies numbered SQL migrations from `db/migrations/` and inserts the seed quiz template if it is not present. `npm run db:seed` can apply the initial migration and seed template explicitly.
 
-The host session token is random and only its HMAC digest is stored. Set a unique production `SESSION_SECRET`. **Known issue:** the current server falls back to a fixed development secret when the variable is missing, and its length check can accept that fallback; see BUG-001 in `docs/BUG_TRACKER.md`. The Render blueprint requests a generated value, but the deployed setting still needs to be checked. Host registration is open by default so the first administrator can register. After creating the host account, set `ALLOW_REGISTRATION=false` and redeploy.
+The host session token is random and only its HMAC digest is stored. Production startup now requires an explicitly configured `SESSION_SECRET` of at least 32 characters and rejects the known development and example placeholders before opening SQLite. Development and test environments retain the local fallback. Set a unique random production secret; the Render blueprint requests a generated value, but the deployed setting still needs to be checked. Host registration is open by default so the first administrator can register. After creating the host account, set `ALLOW_REGISTRATION=false` and redeploy.
 
 ## GitHub setup
 
@@ -112,7 +112,7 @@ Render persistent disks are available on paid services, so this SQLite configura
 | `PORT` | HTTP and Socket.IO port | `3000` |
 | `HOST` | Bind address | `0.0.0.0` |
 | `PUBLIC_BASE_URL` | Absolute URL used for QR codes and share links | Request URL fallback |
-| `SESSION_SECRET` | HMAC key for opaque host/player session tokens | Development-only fallback |
+| `SESSION_SECRET` | HMAC key for opaque host/player session tokens | Development-only fallback; required in production |
 | `DATABASE_PATH` | SQLite database file | `./data/qba.sqlite` |
 | `ALLOW_REGISTRATION` | Permit new host accounts | `true` |
 | `NODE_ENV` | Enables secure cookies and production checks | unset |
@@ -125,11 +125,12 @@ Students do not provide emails or accounts. Their nickname, selected character, 
 
 ## Latest verification
 
-Audit baseline: `d7b2339c84d47060b3f39ac6d03d3f254e4e4a64` (2026-11-24).
+Audit baseline: `d7b2339c84d47060b3f39ac6d03d3f254e4e4a64` (2026-11-24). BUG-001 follow-up started at `b226721a7d1887c2bc0c96f91446d6fe4b84acf9`.
 
+- `node test/config.test.js`: passed, 5/5, including missing/blank/short/placeholder rejection and startup rejection before SQLite creation.
 - `node test/core.test.js`: passed, 7 tests.
 - `npm run build`: passed; Vite reports a 1.93 MB minified JavaScript chunk (486 KB gzip), above its 500 KB warning threshold.
-- `npm test`: blocked at the Socket.IO integration test because this execution environment denies local TCP binds (`EPERM`); the test times out waiting for `/api/health`. Run it in the developer's WSL environment for network verification.
+- `npm test`: the config and core suites passed; the Socket.IO integration suite failed while waiting for `/api/health`. A previous isolated probe in this environment confirmed local TCP bind denial (`EPERM`); run the integration suite in WSL for network verification.
 - `npm audit --json`: blocked because the npm registry could not be resolved (`EAI_AGAIN`). Current dependency advisories are unknown.
 - Browser automation, physical devices, Render deployment/storage, and concurrent load have not been tested. No compatibility or participant-capacity claim is made.
 

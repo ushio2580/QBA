@@ -1,14 +1,15 @@
 # QBA — Current project status
 
-Last audited: 2026-11-24. The earlier imported status was based on a partial static review; this entry supersedes that baseline while preserving its historical notes in `docs/DEVELOPMENT_LOG.md`.
+Last updated: 2026-11-24. The initial local audit superseded the earlier imported partial review; this follow-up records the BUG-001 repair and preserves prior history in `docs/DEVELOPMENT_LOG.md`.
 
 ## Repository baseline
 
 - Repository: `https://github.com/ushio2580/QBA`; branch: `main`.
 - Exact HEAD: `d7b2339c84d47060b3f39ac6d03d3f254e4e4a64` (`Fix tournament bracket and mobile controls`).
 - Local HEAD and `origin/main` matched at audit start. A read-only GitHub API lookup confirmed the same commit SHA on remote `main`; the connected GitHub integration reports pull-only permission. The user owns pushes.
-- No tracked changes existed at audit start. Pre-existing untracked imports were `AGENTS.md`, `AGENTS.md:Zone.Identifier`, `START_HERE.md`, and `docs/`. They were preserved. This audit modifies documentation only; application source remains unchanged.
+- No tracked changes existed at initial audit start. Pre-existing untracked imports were `AGENTS.md`, `AGENTS.md:Zone.Identifier`, `START_HERE.md`, and `docs/`; they were preserved. The initial audit changed documentation only. The later BUG-001 follow-up modifies the server/configuration code and tests as recorded below.
 - Environment: Node `v22.22.1`, npm `9.2.0`; installed top-level packages match the manifest. `package-lock.json` is tracked.
+- BUG-001 follow-up began from clean commit `b226721a7d1887c2bc0c96f91446d6fe4b84acf9` on `main`; local `origin/main` tracking ref matched. No remote API refresh was performed for this follow-up. Current working tree contains the uncommitted secret-validation fix, its tests, and memory updates.
 
 ## Architecture
 
@@ -26,12 +27,12 @@ Last audited: 2026-11-24. The earlier imported status was based on a partial sta
 | ID | Area | Status | Evidence and remaining work |
 |---|---|---|---|
 | P01 | Runnable platform | IMPLEMENTED_UNVERIFIED | Node/npm, installed dependencies, lockfile and production build verified. Clean `npm ci`, server health and production startup were not verified. |
-| P02 | Host authentication/ownership | IMPLEMENTED_UNVERIFIED | Password/session and ownership code exists. BUG-001 shows missing production secret is accepted; auth/ownership integration cases are absent. |
+| P02 | Host authentication/ownership | IMPLEMENTED_UNVERIFIED | Production secret validation and early startup rejection are verified by `node test/config.test.js`; broader auth/ownership integration cases are absent. |
 | P03 | Quiz editor | IMPLEMENTED_UNVERIFIED | CRUD/editor code exists; no browser CRUD, Unicode or round-trip test. |
 | P04 | Seed/import/export | IMPLEMENTED_UNVERIFIED | Unit test verifies at least 30 valid editable seed questions. CSV/XLSX/JSON import/export behavior is not tested. |
 | P05 | Persistence/snapshots | IMPLEMENTED_UNVERIFIED | SQLite migrations and quiz snapshot code exist; no isolated restart-persistence or active-snapshot test. |
 | P06 | Rooms/QR/lobby | IMPLEMENTED_UNVERIFIED | Room-code, URL, QR and lobby paths exist; integration test has not reached health in this sandbox; no device QR test. |
-| P07 | Real-time multiplayer | IMPLEMENTED_UNVERIFIED | Authoritative socket/game code and one two-player integration scenario exist. Network execution is blocked here; isolation, reconnect and answer-payload tests remain absent. |
+| P07 | Real-time multiplayer | IMPLEMENTED_UNVERIFIED | Authoritative socket/game code and a two-question integration scenario now cover correct Q1 resolution and both players moving in Q2. Network execution is blocked here; isolation, reconnect and answer-payload tests remain absent. BUG-008 is still unverified until this scenario runs in WSL and on local devices. |
 | P08 | Survival arena | IMPLEMENTED_UNVERIFIED | Playable code path has movement, answer zones, one chaser type and spike hazards. Full match play and device physics were not tested. |
 | P09 | Question flow | IMPLEMENTED_UNVERIFIED | Server phases, answer locking and feedback code exist; lock/timeout/resolution acceptance tests are absent. |
 | P10 | Health/rules | IMPLEMENTED_UNVERIFIED | Educational/arcade rule code exists; environmental HP floor and damage boundary tests are absent. |
@@ -44,7 +45,7 @@ Last audited: 2026-11-24. The earlier imported status was based on a partial sta
 | P17 | Analytics/review | IN_PROGRESS | Ranking, analytics and CSV export paths exist. Missed-question review and safe practice mode are absent; no analytics/export test. |
 | P18 | Accessibility/polish | IN_PROGRESS | High-contrast, reduced-motion, larger-text preferences and letter labels exist. Sound controls, explicit colorblind mode, complete focus/dialog handling and device validation are missing. |
 | P19 | Render deployment | IMPLEMENTED_UNVERIFIED | Blueprint configures Docker, health path, generated secret, public URL input and SQLite disk. Actual Render service settings, disk attachment, URL, WebSocket and persistence are unknown. |
-| P20 | Security/performance | IN_PROGRESS | Several input/auth controls exist, but BUG-001 and BUG-006 are open; npm advisory audit and 30–50 client load test are blocked/not run. |
+| P20 | Security/performance | IN_PROGRESS | BUG-001 is fixed and locally verified; BUG-006 remains open. npm advisory audit and 30–50 client load test are still blocked/not run. |
 | P21 | Robot Duel | TODO | Not implemented. |
 | P22 | Quiz Royale | TODO | Not implemented. |
 | P23 | Co-op Boss Battle | TODO | Not implemented. |
@@ -71,11 +72,19 @@ The latest user checkpoint contains the earlier bracket/mobile fixes: the server
 
 ## Deployment and manual checks
 
-`render.yaml` requests a 1 GB disk mounted at `/var/data`, sets `DATABASE_PATH=/var/data/qba.sqlite`, asks Render to generate `SESSION_SECRET`, and requires `PUBLIC_BASE_URL` to be supplied. This is configuration evidence only; the live Render dashboard was not accessed. Before classroom use, the user should verify the deployed commit, Render service branch/auto-deploy state, disk mount and plan, database path on the mounted disk, a non-default generated secret, `PUBLIC_BASE_URL=https://<service>.onrender.com`, registration setting, `/api/health`, WSS connection, and that a saved quiz survives a redeploy. Do not share environment values.
+`render.yaml` requests a 1 GB disk mounted at `/var/data`, sets `DATABASE_PATH=/var/data/qba.sqlite`, asks Render to generate `SESSION_SECRET`, and requires `PUBLIC_BASE_URL` to be supplied. This is configuration evidence only; the live Render dashboard was not accessed. Before deploying the new startup guard, verify that the service has a unique secret configured; the updated server intentionally exits before opening SQLite if it does not. Keep the existing secret unchanged to preserve sessions. Also verify the deployed commit, Render service branch/auto-deploy state, disk mount and plan, database path on the mounted disk, `PUBLIC_BASE_URL=https://<service>.onrender.com`, registration setting, `/api/health`, WSS connection, and that a saved quiz survives a redeploy. Do not share environment values.
+
+## BUG-001 follow-up — 2026-11-24
+
+- Starting commit: `b226721a7d1887c2bc0c96f91446d6fe4b84acf9`; branch `main`; working tree clean before implementation.
+- Root cause: absent `SESSION_SECRET` selected a fixed development key, and its length passed the production-only guard. Validation also happened after SQLite migrations and startup updates.
+- Fix: `backend/config.js` now rejects absent, blank, under-32-character, development-default, and `.env.example` placeholder secrets in production, while retaining the development/test fallback. `backend/server.js` validates before opening or mutating SQLite. Configured secrets are returned byte-for-byte to avoid invalidating sessions.
+- Evidence: `node test/config.test.js` PASS (5/5); `node test/core.test.js` PASS (7/7); `npm run build` PASS_WITH_WARNING. The updated `node test/multiplayer.integration.test.js` fails before its assertions while waiting for `/api/health`; this environment's local bind restriction was confirmed during the initial audit. Render configuration and current production variable remain unverified.
+- Next: run `node test/multiplayer.integration.test.js` in WSL, then reproduce BUG-008 on two local devices including touch controls. Collect phases/locks/socket status/position changes without tokens. Do not proceed online until the local flow passes. Then fix BUG-006 and cover tournament fairness/concurrency regressions.
 
 ## Prioritized next work
 
-1. Fix BUG-001 and add production-secret startup tests before broader use; confirm the live service already has a unique secret without exposing it.
+1. Reproduce BUG-008 with two local players, resolve the first question, and verify both players move in the second question; inspect socket/phase evidence if it freezes. Do not move online until this passes locally.
 2. Fix BUG-006 role/socket detachment before relying on player-to-spectator transitions.
 3. Add regression tests for BUG-002, BUG-003, BUG-004 and BUG-005, then exercise 2/3/5/8-player brackets in a WSL environment that permits local sockets.
 4. Add CI using existing `npm ci`, `npm test`, and `npm run build`; keep deployment separate and user-gated.

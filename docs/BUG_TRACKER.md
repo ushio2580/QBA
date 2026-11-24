@@ -1,6 +1,6 @@
 # QBA — Bug tracker
 
-Audit baseline: `d7b2339c84d47060b3f39ac6d03d3f254e4e4a64`, 2026-11-24. Historical findings below were rechecked against the current source. `OPEN` means work remains; `REPRODUCED` distinguishes an observed failure from static-only findings. No application fixes were made during this documentation-only audit.
+Initial audit baseline: `d7b2339c84d47060b3f39ac6d03d3f254e4e4a64`, 2026-11-24. BUG-001 was repaired in a follow-up starting at `b226721a7d1887c2bc0c96f91446d6fe4b84acf9`; other findings remain open unless noted. `OPEN` means work remains; `REPRODUCED` distinguishes an observed failure from static-only findings.
 
 ## Priority
 
@@ -10,27 +10,27 @@ P0: confirmed critical breach, data loss, tournament corruption or core outage. 
 
 | ID | Priority | Status | Summary | Evidence / requirement |
 |---|---|---|---|---|
-| BUG-001 | P1 | REPRODUCED | Production accepts the fixed fallback when `SESSION_SECRET` is absent/blank | `backend/server.js` secret initialization; P02/P20; Render mitigation only if applied |
+| BUG-001 | P1 | VERIFIED | Production rejects missing/default/short session secrets before SQLite initialization | `backend/config.js`, `backend/server.js`, `test/config.test.js`; P02/P20; live Render setting remains unknown |
 | BUG-002 | P1 | OPEN | Simultaneous tied elimination favors slot B; exhausted tie uses nickname order | `continueAfterFeedback`; P12 |
 | BUG-003 | P1 | OPEN | Round may start while tournament is paused during inter-round delay | `maybeAdvance`; P13/P14 |
 | BUG-004 | P1 | OPEN | Sudden-death append can mutate the shared question array across simultaneous matches | `makeBracketRound` / `newGame`; P13 |
 | BUG-005 | P2 | OPEN | Bye assignment does not avoid giving the same player consecutive byes | `pairPlayers` / `startRound`; P13 |
 | BUG-006 | P1 | OPEN | Player-to-spectator socket role switch leaves player marked connected and bound to spectator socket | `spectator:attach`; P14/P15 |
 | BUG-007 | P2 | OPEN | Integration harness hides server startup logs and reports generic health timeout | `test/multiplayer.integration.test.js`; QA reliability |
+| BUG-008 | P1 | OPEN (reported, not reproduced) | Match sometimes appears stuck after the first correct answer; Player 2 sometimes cannot move | local two-player gameplay; P07/P09/P11 |
 
 ## Entries
 
-### BUG-001 — Missing production secret falls back to a known key
+### BUG-001 — Production session secret fallback
 
-- Status: REPRODUCED; fix remains OPEN.
-- Priority: P1. The imported tracker initially called this P0. Audit lowered it because production exposure is unknown and the current bearer tokens are high-entropy random values whose HMAC digests are stored; the fixed HMAC key remains an unsafe configuration and must be rejected in production.
-- First observed: imported static review, 2026-11-24; rechecked at HEAD `d7b2339c84d47060b3f39ac6d03d3f254e4e4a64`.
-- Expected: production startup rejects absent, blank, short, or known development-default `SESSION_SECRET`.
-- Actual: `process.env.SESSION_SECRET || 'development-only-qba-session-secret-change-me'` selects the fixed default; only length is checked, and the default exceeds the threshold.
-- Evidence/reproduction: ran an isolated startup with `NODE_ENV=production`, `SESSION_SECRET` omitted and a disposable SQLite path. The process passed the secret check and reached `server.listen`; it then exited with `EPERM` because this audit sandbox forbids local binds. No secret value was printed. This confirms the guard did not reject the missing variable.
-- Deployment: `render.yaml` requests a generated secret, which mitigates only if the blueprint was applied and the live value is non-default. Live Render settings were not inspected; deployed exposure is UNKNOWN.
-- Regression: fail before listen for missing, blank, default and short values; allow a valid unique value. Test without logging the value.
-- Next: fix in an authorized implementation task, then verify the Render variable exists without reading or disclosing it.
+- Status: VERIFIED locally; the Render environment variable remains unverified.
+- Priority: P1. The initial audit lowered this from imported P0 because live exposure was unknown and session tokens are high-entropy random values; requiring a configured production key remains necessary.
+- First observed: 2026-11-24; fixed in the working tree during follow-up from baseline `b226721a7d1887c2bc0c96f91446d6fe4b84acf9`.
+- Root cause: missing `SESSION_SECRET` selected a fixed development key whose length passed the production guard. The guard ran after SQLite migrations and startup updates.
+- Fix: `resolveSessionSecret` rejects absent, blank, under-32-character, development-default, and `.env.example` placeholder values in production. Server validation runs before SQLite opens. Development/test behavior retains the fallback; configured values are not rewritten.
+- Evidence: `node test/config.test.js` PASS (5/5), including production rejection cases, valid configuration, local fallback, and a child-process startup check proving a missing secret does not create the SQLite file. Error messages do not include secret input.
+- Regression: retain these tests and add a Render configuration check only when it can be performed without reading or sharing the value.
+- Deployment implication: before deploying this fix, confirm a unique `SESSION_SECRET` is already configured in Render. If absent, the new server will fail early without touching SQLite. Keep an existing secret unchanged to preserve sessions.
 
 ### BUG-002 — Biased simultaneous-elimination and exhausted-tie rules
 
@@ -91,6 +91,17 @@ P0: confirmed critical breach, data loss, tournament corruption or core outage. 
 - Actual/source evidence: child server uses `stdio: 'ignore'`; a random port is selected from a fixed range; a failed health poll reports only `QBA server did not become healthy.`; cleanup waits a fixed 300 ms after sending SIGTERM.
 - Current run: `node test/multiplayer.integration.test.js` failed waiting for health. A separate local bind probe hit `EPERM`, so this environment could not exercise Socket.IO; logs were suppressed by the test harness.
 - Regression: capture bounded/sanitized child stderr, wait for child exit, and report port-bind/startup cause while retaining isolated temp DB/credentials.
+
+### BUG-008 — Intermittent match freeze / Player 2 cannot move
+
+- Status: OPEN; user-reported, not reproduced. No root cause confirmed.
+- Priority: provisional P1 because it can block the core multiplayer match.
+- Report: first question appears to answer correctly; the match sometimes then freezes, and Player 2 sometimes reports that movement stops.
+- Known evidence: static review found no direct cause in the normal question transition. Player movement is accepted only when the socket role is `player`, the tournament is active, and the game phase is `ACTIVE`; locked players are intentionally immobile until the next question resets `lockedAnswer`. BUG-006 provides a plausible role-transition failure if Player 2 entered spectator mode between rounds, but that does not explain a freeze within the same match by itself.
+- Test gap: the original integration case used one question and sent no answer. It has now been extended to use two questions, move both clients into Q1's correct zone, and check both clients receive Q2 and can move. The updated test has not completed a network run in this environment.
+- Reproduction: run the updated `node test/multiplayer.integration.test.js` in local WSL. Then create a quiz with at least two questions and start two distinct browser clients/devices. Complete Q1 correctly, wait through feedback and Q2 activation, and move each player independently. Record `matchId`, phase/question number, both `self.locked` values, socket connect/disconnect and attach events, and before/after coordinates. Do not log player tokens.
+- Regression: the updated integration case covers server state/position for two sockets after Q1. Add role-change coverage if Player 2 watched another match; physical touch control still needs a separate browser/device run.
+- Limitation: this audit environment blocks local TCP binds, so the updated integration scenario only received syntax/static review here. Do not change the game state machine until it reproduces or stronger evidence identifies a cause.
 
 ## Previously reported issue now addressed
 
