@@ -2,33 +2,20 @@ import Phaser from 'phaser';
 
 const COLORS = { cyan: 0x55e8df, pink: 0xff6196, purple: 0x9b87ff, gold: 0xffc857, green: 0x61e294, white: 0xf4f6ff, muted: 0x8690b3 };
 const avatarColors = ['#55e8df','#ff6196','#9b87ff','#ffc857','#61e294','#ff8d55','#6da6ff','#ef78ff'];
-const gameRuntime = { state: null, question: null, scene: null, socket: null, keys: null, seq: 0, dashPressed: false, abilityPressed: false, joystick: { active:false,x:0,y:0,id:null }, target: null };
+const gameRuntime = { state: null, question: null, scene: null, socket: null, keys: null, seq: 0, dashPressed: false, abilityPressed: false, moveInput: { active:false,x:0,y:0 }, target: null };
 
 export function startArena(container, socket, handlers = {}) {
-  gameRuntime.socket = socket; gameRuntime.handlers = handlers; gameRuntime.state = null; gameRuntime.question = null;
+  gameRuntime.socket = socket; gameRuntime.handlers = handlers; gameRuntime.state = null; gameRuntime.question = null; gameRuntime.moveInput = { active:false,x:0,y:0 };
   const scene = {
     key: 'Arena',
     create() {
       gameRuntime.scene = this;
       this.input.keyboard.addCapture(['W','A','S','D','UP','DOWN','LEFT','RIGHT','SPACE']);
       this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,E'); gameRuntime.keys = this.keys;
-      this.input.on('pointerdown', pointer => {
-        if (pointer.worldX < 210 && pointer.worldY > 350) {
-          gameRuntime.joystick = { active:true, x:pointer.id, y:pointer.id, id:pointer.id, startX:pointer.worldX, startY:pointer.worldY, dx:0, dy:0 };
-        }
-      });
-      this.input.on('pointermove', pointer => {
-        const joy = gameRuntime.joystick;
-        if (!joy.active || pointer.id !== joy.id) return;
-        joy.dx = Math.max(-1,Math.min(1,(pointer.worldX-joy.startX)/60));
-        joy.dy = Math.max(-1,Math.min(1,(pointer.worldY-joy.startY)/60));
-      });
-      this.input.on('pointerup', pointer => { if(gameRuntime.joystick.active && pointer.id===gameRuntime.joystick.id)gameRuntime.joystick={active:false,x:0,y:0,id:null}; });
       this.graphics = this.add.graphics();
-      this.label = this.add.text(0,0,'',{fontFamily:'Inter,system-ui',fontSize:'15px',color:'#f4f6ff',fontStyle:'bold',align:'center',wordWrap:{width:145}}).setOrigin(.5).setDepth(5);
+      this.playerLabels = Array.from({length:2}, () => this.add.text(0,0,'',{fontFamily:'Inter,system-ui',fontSize:'11px',color:'#f4f6ff',fontStyle:'bold',align:'center',backgroundColor:'#10172c'}).setPadding(6,3).setOrigin(.5,1).setDepth(6).setVisible(false));
       this.zoneLabels = Array.from({length:4}, () => this.add.text(0,0,'',{fontFamily:'Inter,system-ui',fontSize:'20px',fontStyle:'900',color:'#ffffff'}).setOrigin(.5).setDepth(2).setVisible(false));
       this.trapLabels = Array.from({length:4}, () => this.add.text(0,0,'⚠',{fontFamily:'system-ui',fontSize:'14px',color:'#ffce65'}).setOrigin(.5).setDepth(3).setVisible(false));
-      this.input.on('gameobjectdown', (_pointer, object) => object?.onTap?.());
     },
     update(time, delta) {
       const s = gameRuntime.state;
@@ -70,25 +57,26 @@ export function startArena(container, socket, handlers = {}) {
       }
       const colors=avatarColors;
       (renderState.players||[]).forEach((p,i)=>{
-        if(p.x==null||p.y==null||!p.alive)return;
+        const nameplate=this.playerLabels[i];
+        if(p.x==null||p.y==null||!p.alive){nameplate?.setVisible(false);return;}
         const color=Phaser.Display.Color.HexStringToColor(colors[i%colors.length]).color;
-        g.fillStyle(color,.22);g.fillCircle(p.x,p.y,28);
-        g.fillStyle(color,1);g.fillRoundedRect(p.x-15,p.y-17,30,34,9);
+        const visibility=p.obscured ? 0.42 : 1;
+        g.fillStyle(color,.22*visibility);g.fillCircle(p.x,p.y,28);
+        g.fillStyle(color,visibility);g.fillRoundedRect(p.x-15,p.y-17,30,34,9);
         g.fillStyle(0x172038,1);g.fillRoundedRect(p.x-10,p.y-8,20,12,5);
         g.fillStyle(0xffffff,.95);g.fillCircle(p.x-5,p.y-2,2);g.fillCircle(p.x+5,p.y-2,2);
         g.fillStyle(0x18213b,1);g.fillRoundedRect(p.x-22,p.y+22,44,5,3);
         g.fillStyle(p.hp<35?0xff5573:0x61e294,1);g.fillRoundedRect(p.x-22,p.y+22,44*Math.max(0,p.hp/p.maxHp),5,3);
         if(p.locked){g.lineStyle(3,0xffffff,.85);g.strokeCircle(p.x,p.y,23);}
+        nameplate?.setPosition(p.x,p.y-23).setText(String(p.nickname||`Player ${i+1}`).slice(0,20)).setAlpha(visibility).setVisible(true);
       });
-      if(gameRuntime.joystick.active){const j=gameRuntime.joystick;g.fillStyle(0xffffff,.08);g.fillCircle(j.startX,j.startY,52);g.lineStyle(2,0x55e8df,.6);g.strokeCircle(j.startX,j.startY,52);g.fillStyle(0x55e8df,.55);g.fillCircle(j.startX+(j.dx||0)*35,j.startY+(j.dy||0)*35,18);}
       const elapsed=Math.max(0,s.endsAt-Date.now());
       if(gameRuntime.handlers?.hud&&time-(this.lastHud||0)>100){gameRuntime.handlers.hud(renderState,elapsed);this.lastHud=time;}
       if(s.phase==='ACTIVE'&&!s.self?.locked){
-        const j=gameRuntime.joystick;
         const key=this.keys||{};
         let ax=(key.D?.isDown||key.RIGHT?.isDown?1:0)-(key.A?.isDown||key.LEFT?.isDown?1:0);
         let ay=(key.S?.isDown||key.DOWN?.isDown?1:0)-(key.W?.isDown||key.UP?.isDown?1:0);
-        if(j.active){ax=j.dx||0;ay=j.dy||0;}
+        if(gameRuntime.moveInput.active){ax=gameRuntime.moveInput.x;ay=gameRuntime.moveInput.y;}
         if(ax||ay){const mag=Math.hypot(ax,ay);ax/=Math.max(1,mag);ay/=Math.max(1,mag);}
         const dash=Boolean(key.SPACE?.isDown||gameRuntime.dashPressed),ability=Boolean(key.E?.isDown||gameRuntime.abilityPressed);
         if(time-(this.lastInput||0)>49){gameRuntime.seq++;gameRuntime.socket?.emit('game:input',{x:ax,y:ay,dash,ability,seq:gameRuntime.seq});this.lastInput=time;gameRuntime.dashPressed=false;gameRuntime.abilityPressed=false;}
@@ -96,8 +84,10 @@ export function startArena(container, socket, handlers = {}) {
     }
   };
   const app = new Phaser.Game({ type: Phaser.AUTO, parent: container, backgroundColor:'#0e1427', scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH,width:960,height:540}, render:{antialias:true,pixelArt:false,roundPixels:true}, scene });
-  return { destroy:()=>{app.destroy(true);gameRuntime.scene=null;gameRuntime.state=null;gameRuntime.previousState=null;gameRuntime.joystick={active:false,x:0,y:0,id:null};}, setState:state=>{gameRuntime.previousState=gameRuntime.state?.matchId===state.matchId?gameRuntime.state:null;gameRuntime.state=state;gameRuntime.receivedAt=performance.now();}, setQuestion:q=>{gameRuntime.question=q;} };
+  return { destroy:()=>{app.destroy(true);gameRuntime.scene=null;gameRuntime.state=null;gameRuntime.previousState=null;gameRuntime.moveInput={active:false,x:0,y:0};}, setState:state=>{gameRuntime.previousState=gameRuntime.state?.matchId===state.matchId?gameRuntime.state:null;gameRuntime.state=state;gameRuntime.receivedAt=performance.now();}, setQuestion:q=>{gameRuntime.question=q;} };
 }
 
+export function setMoveInput(x,y){gameRuntime.moveInput={active:true,x:Math.max(-1,Math.min(1,Number(x)||0)),y:Math.max(-1,Math.min(1,Number(y)||0))};}
+export function resetMoveInput(){gameRuntime.moveInput={active:false,x:0,y:0};}
 export function pressDash(){gameRuntime.dashPressed=true;}
 export function pressAbility(){gameRuntime.abilityPressed=true;}

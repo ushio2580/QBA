@@ -69,6 +69,9 @@ test('two independent Socket.IO players receive a server-run Survival Quiz arena
   assert.equal(aState.question.question,'Which answer is correct?');
   assert.deepEqual(aState.question.answers,bState.question.answers);
   assert.equal('correctAnswerIndex' in aState.question,false,'clients do not receive the correct answer before resolution');
+  const rival=aState.players.find(player=>player.id!==aState.self.id);
+  assert.equal(typeof rival?.x,'number','the active player can see the rival outside an answer zone');
+  assert.equal(typeof rival?.y,'number','the rival position is synchronized during the battle');
   const startX=aState.self.x;
   for(let seq=1;seq<=6;seq++)a.emit('game:input',{x:1,y:0,seq});
   const moved=await eventOnce(a,'game:state',state=>state.phase==='ACTIVE'&&state.self.x>startX+12);

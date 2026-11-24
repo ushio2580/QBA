@@ -1,6 +1,6 @@
 import { io } from 'socket.io-client';
 import * as XLSX from 'xlsx';
-import { startArena, pressDash, pressAbility } from './game.js';
+import { startArena, setMoveInput, resetMoveInput, pressDash, pressAbility } from './game.js';
 import './style.css';
 
 const app=document.querySelector('#app');
@@ -302,11 +302,33 @@ function connectSocket(playerToken=null){
 function disconnectSocket(){if(socket){socket.removeAllListeners();socket.disconnect();socket=null;}if(arena){arena.destroy();arena=null;}gameState=null;activeMatchId=null;}
 function renderGame(){
   currentView='game';history.replaceState({},'','/game');
-  app.innerHTML=`<main class="game-screen"><header class="game-top"><div class="brand"><span class="brand-icon">Q<span>✦</span></span><span>QUIZ BATTLE <b>ARENA</b></span></div><div class="game-status"><span class="live-dot"></span> LIVE MATCH <b id="game-round">ROUND 1</b></div><button class="icon-button" data-action="game-help" title="Controls">?</button></header><section class="game-layout"><div class="game-hud"><div class="question-progress"><span id="question-index">QUESTION 1 / 3</span><span id="phase-label">GET READY</span></div><h1 id="game-question">Prepare to move into an answer zone.</h1><img id="question-image" class="question-image hidden" alt="Question illustration"><p id="game-subtitle">Stand in a zone for 0.75 seconds to lock in your answer.</p><div class="countdown-row"><div class="countdown-track"><span id="countdown-fill"></span></div><b id="countdown">—</b></div></div><div class="arena-wrap"><div id="phaser-root"></div><div class="arena-label">SURVIVAL ARENA <span>960 × 540</span></div><div class="touch-controls"><button class="touch-button dash-button" id="dash-button"><span>⇧</span><small>DASH</small></button><button class="touch-button ability-button" id="ability-button"><span>◉</span><small>SHIELD</small></button></div><div class="move-hint">WASD / ARROWS <span>·</span> MOVE <span>·</span> SPACE DASH</div></div><div class="answers-grid" id="answers-grid"></div><div class="game-note"><span>⚡</span><span>Find the answer zone and hold it to lock your answer. Rival movement stays hidden until reveal.</span></div></section></main>`;
+  app.innerHTML=`<main class="game-screen"><header class="game-top"><div class="brand"><span class="brand-icon">Q<span>✦</span></span><span>QUIZ BATTLE <b>ARENA</b></span></div><div class="game-status"><span class="live-dot"></span> LIVE MATCH <b id="game-round">ROUND 1</b></div><button class="icon-button" data-action="game-help" title="Controls">?</button></header><section class="game-layout"><div class="game-hud"><div class="question-progress"><span id="question-index">QUESTION 1 / 3</span><span id="phase-label">GET READY</span></div><h1 id="game-question">Prepare to move into an answer zone.</h1><img id="question-image" class="question-image hidden" alt="Question illustration"><p id="game-subtitle">Stand in a zone for 0.75 seconds to lock in your answer.</p><div class="countdown-row"><div class="countdown-track"><span id="countdown-fill"></span></div><b id="countdown">—</b></div></div><div class="arena-wrap"><div id="phaser-root"></div><div class="arena-label">SURVIVAL ARENA <span>960 × 540</span></div><div class="virtual-joystick" id="move-joystick" role="application" aria-label="Touch joystick for movement"><span class="joystick-caption">MOVE</span><div class="joystick-base"><div class="joystick-knob"></div></div></div><div class="touch-controls"><button class="touch-button dash-button" id="dash-button"><span>⇧</span><small>DASH</small></button><button class="touch-button ability-button" id="ability-button"><span>◉</span><small>SHIELD</small></button></div><div class="move-hint">WASD / ARROWS <span>·</span> MOVE <span>·</span> SPACE DASH</div></div><div class="answers-grid" id="answers-grid"></div><div class="game-note"><span>⚡</span><span>Your rival stays visible while moving. Anti-copy softens their position near answer zones and hides it after they lock.</span></div></section></main>`;
   arena=startArena($('#phaser-root'),socket,{hud:updateGameHud});
+  bindVirtualJoystick();
   $('#dash-button').addEventListener('pointerdown',e=>{e.preventDefault();pressDash();});$('#ability-button').addEventListener('pointerdown',e=>{e.preventDefault();pressAbility();});
   $('.game-screen').addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(b?.dataset.action==='game-help')showHelp();});
   if(gameState){arena.setState(gameState);updateGameHud(gameState);}
+}
+function bindVirtualJoystick(){
+  const stick=$('#move-joystick');const base=$('.joystick-base',stick);const knob=$('.joystick-knob',stick);if(!stick||!base||!knob)return;
+  let pointerId=null;
+  const move=e=>{
+    if(e.pointerId!==pointerId)return;
+    const rect=base.getBoundingClientRect();const radius=Math.min(rect.width,rect.height)*.36;const dx=e.clientX-(rect.left+rect.width/2);const dy=e.clientY-(rect.top+rect.height/2);const length=Math.hypot(dx,dy);const scale=length>radius?radius/length:1;const px=dx*scale,py=dy*scale;
+    knob.style.transform=`translate(calc(-50% + ${px}px),calc(-50% + ${py}px))`;
+    setMoveInput(px/radius,py/radius);
+  };
+  const release=e=>{
+    if(e.pointerId!==pointerId)return;
+    pointerId=null;window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',release);window.removeEventListener('pointercancel',release);resetMoveInput();stick.classList.remove('active');knob.style.transform='translate(-50%,-50%)';
+  };
+  stick.addEventListener('pointerdown',e=>{
+    if(pointerId!==null)return;
+    e.preventDefault();pointerId=e.pointerId;stick.classList.add('active');
+    try{stick.setPointerCapture(e.pointerId);}catch{}
+    window.addEventListener('pointermove',move);window.addEventListener('pointerup',release);window.addEventListener('pointercancel',release);
+    move(e);
+  });
 }
 function updateGameHud(state,remaining){
   if(!$('#game-question'))return;

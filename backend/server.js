@@ -822,8 +822,14 @@ function gamePublicState(t, game, forPlayerId = null) {
   const self = game.players.get(forPlayerId);
   const players = game.playerIds.map(id => {
     const p = t.players.get(id), s = game.players.get(id);
-    const hidden = forPlayerId && id !== forPlayerId && t.settings.antiCopy && ['ACTIVE','ANSWER_LOCK'].includes(game.phase);
-    return { id, nickname:p?.nickname, x:hidden?null:s?.x, y:hidden?null:s?.y, hp:s?.hp, maxHp:s?.maxHp, correct:s?.correct, alive:s?.alive, locked:s?.lockedAnswer!==null };
+    const nearAnswerZone = (game.zoneMap.get(id) || []).some(zone => s && Math.hypot(zone.x - s.x, zone.y - s.y) < 58);
+    const confirmed = Boolean(s && s.lockedAnswer !== null);
+    const opponent = Boolean(forPlayerId && id !== forPlayerId);
+    const hidden = Boolean(opponent && t.settings.antiCopy && confirmed);
+    const obscured = Boolean(opponent && t.settings.antiCopy && !confirmed && game.phase === 'ACTIVE' && nearAnswerZone);
+    const x = hidden ? null : obscured ? Math.round(s.x / 80) * 80 : s?.x;
+    const y = hidden ? null : obscured ? Math.round(s.y / 80) * 80 : s?.y;
+    return { id, nickname:p?.nickname, x, y, obscured, hp:s?.hp, maxHp:s?.maxHp, correct:s?.correct, alive:s?.alive, locked:s?.lockedAnswer!==null };
   });
   const zones = forPlayerId ? (game.zoneMap.get(forPlayerId) || []) : [];
   const hazards=game.hazards.map(h=>{const phase=(now()-h.epoch+6500)%6500;return{id:h.id,x:h.x,y:h.y,warning:phase<1200,active:phase>=1200&&phase<3100};});
