@@ -73,7 +73,7 @@ function currentHost(req) {
 function requireHost(req, res, next) {
   const host = currentHost(req);
   if (!host) return res.status(401).json({ error: 'Please sign in to continue.' });
-  req.host = host;
+  req.authHost = host;
   next();
 }
 function sameOrigin(req, res, next) {
@@ -207,27 +207,27 @@ app.post('/api/auth/logout', (req, res) => {
   res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
   res.json({ ok: true });
 });
-app.get('/api/me', requireHost, (req, res) => res.json({ host: req.host }));
+app.get('/api/me', requireHost, (req, res) => res.json({ host: req.authHost }));
 
 app.get('/api/quizzes', requireHost, (req, res) => {
-  const rows = db.prepare('SELECT q.*, (SELECT COUNT(*) FROM questions x WHERE x.quiz_id=q.id) question_count FROM quizzes q WHERE host_id=? AND archived=0 ORDER BY updated_at DESC').all(req.host.id);
+  const rows = db.prepare('SELECT q.*, (SELECT COUNT(*) FROM questions x WHERE x.quiz_id=q.id) question_count FROM quizzes q WHERE host_id=? AND archived=0 ORDER BY updated_at DESC').all(req.authHost.id);
   res.json(rows);
 });
 app.post('/api/quizzes', requireHost, (req, res) => {
   const checked = validateQuiz(req.body);
   if (checked.errors.length) return res.status(400).json({ error: 'Please fix the quiz before saving.', details: checked.errors });
-  const id = insertQuiz(req.host.id, checked.value);
-  res.status(201).json(decodeQuiz(id, req.host.id));
+  const id = insertQuiz(req.authHost.id, checked.value);
+  res.status(201).json(decodeQuiz(id, req.authHost.id));
 });
 app.get('/api/quizzes/:id', requireHost, (req, res) => {
-  const quiz = decodeQuiz(req.params.id, req.host.id);
+  const quiz = decodeQuiz(req.params.id, req.authHost.id);
   if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
   res.json(quiz);
 });
 app.put('/api/quizzes/:id', requireHost, (req, res) => {
   const checked = validateQuiz(req.body);
   if (checked.errors.length) return res.status(400).json({ error: 'Please fix the quiz before saving.', details: checked.errors });
-  const existing = db.prepare('SELECT id FROM quizzes WHERE id=? AND host_id=? AND archived=0').get(req.params.id, req.host.id);
+  const existing = db.prepare('SELECT id FROM quizzes WHERE id=? AND host_id=? AND archived=0').get(req.params.id, req.authHost.id);
   if (!existing) return res.status(404).json({ error: 'Quiz not found.' });
   const update = db.transaction(() => {
     db.prepare('UPDATE quizzes SET title=?,description=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(checked.value.title, checked.value.description, req.params.id);
@@ -238,19 +238,19 @@ app.put('/api/quizzes/:id', requireHost, (req, res) => {
       q.explanation, q.timeLimit, q.difficulty, q.wrongAnswerDamage, q.correctAnswerReward, q.image));
   });
   update();
-  res.json(decodeQuiz(req.params.id, req.host.id));
+  res.json(decodeQuiz(req.params.id, req.authHost.id));
 });
 app.post('/api/quizzes/:id/duplicate', requireHost, (req, res) => {
-  const quiz = decodeQuiz(req.params.id, req.host.id);
+  const quiz = decodeQuiz(req.params.id, req.authHost.id);
   if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
   quiz.title = `${quiz.title} (copy)`;
   quiz.questions = quiz.questions.map(q => ({ ...q, id: randomUUID() }));
   const checked = validateQuiz(quiz);
-  const id = insertQuiz(req.host.id, checked.value);
-  res.status(201).json(decodeQuiz(id, req.host.id));
+  const id = insertQuiz(req.authHost.id, checked.value);
+  res.status(201).json(decodeQuiz(id, req.authHost.id));
 });
 app.delete('/api/quizzes/:id', requireHost, (req, res) => {
-  const row = db.prepare('SELECT id FROM quizzes WHERE id=? AND host_id=? AND archived=0').get(req.params.id, req.host.id);
+  const row = db.prepare('SELECT id FROM quizzes WHERE id=? AND host_id=? AND archived=0').get(req.params.id, req.authHost.id);
   if (!row) return res.status(404).json({ error: 'Quiz not found.' });
   const inUse = db.prepare("SELECT COUNT(*) AS n FROM tournaments WHERE quiz_id=? AND status IN ('lobby','active','paused')").get(row.id).n;
   if (inUse) return res.status(409).json({ error: 'This quiz is attached to an open room. Finish or close the room before deleting it.' });
@@ -265,13 +265,13 @@ app.delete('/api/quizzes/:id', requireHost, (req, res) => {
 app.get('/api/tournaments', requireHost, (req, res) => {
   const base = String(process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
   const rooms = [...tournaments.values()]
-    .filter(t => t.hostId === req.host.id && ['lobby', 'active', 'paused'].includes(t.status))
+    .filter(t => t.hostId === req.authHost.id && ['lobby', 'active', 'paused'].includes(t.status))
     .sort((a,b) => b.createdAt - a.createdAt)
     .map(t => ({ ...lobbyView(t), joinUrl: `${base}/join/${t.publicId}` }));
   res.json(rooms);
 });
 app.post('/api/tournaments', requireHost, (req, res) => {
-  const quiz = decodeQuiz(String(req.body?.quizId || ''), req.host.id);
+  const quiz = decodeQuiz(String(req.body?.quizId || ''), req.authHost.id);
   if (!quiz) return res.status(404).json({ error: 'Choose one of your saved quizzes.' });
   const settings = normalizeSettings(req.body?.settings);
   if (quiz.questions.length < settings.questionsPerMatch) return res.status(400).json({ error: `This quiz has ${quiz.questions.length} questions; ${settings.questionsPerMatch} are configured per match.` });
@@ -283,22 +283,22 @@ app.post('/api/tournaments', requireHost, (req, res) => {
     if (!db.prepare('SELECT 1 FROM tournaments WHERE room_code=?').get(roomCode)) break;
   }
   db.prepare('INSERT INTO tournaments (id,host_id,quiz_id,room_code,public_id,status,settings_json) VALUES (?,?,?,?,?,?,?)')
-    .run(id, req.host.id, quiz.id, roomCode, publicId, 'lobby', JSON.stringify(settings));
+    .run(id, req.authHost.id, quiz.id, roomCode, publicId, 'lobby', JSON.stringify(settings));
   const base = String(process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
-  const tournament = { id, publicId, roomCode, hostId: req.host.id, quizId: quiz.id, quizTitle: quiz.title, settings, createdAt: now(), players: new Map(), tokens: new Map(), matches: [], usedQuestionIds: new Set(), round: 0, status: 'lobby', paused: false, hostSocket: null, snapshot: null, timer: null, matchById: new Map() };
+  const tournament = { id, publicId, roomCode, hostId: req.authHost.id, quizId: quiz.id, quizTitle: quiz.title, settings, createdAt: now(), players: new Map(), tokens: new Map(), matches: [], usedQuestionIds: new Set(), round: 0, status: 'lobby', paused: false, hostSocket: null, snapshot: null, timer: null, matchById: new Map() };
   tournaments.set(publicId, tournament);
   res.status(201).json({ id, publicId, roomCode, quizTitle: quiz.title, joinUrl: `${base}/join/${publicId}`, settings });
 });
 app.get('/api/tournaments/:publicId/qr', requireHost, async (req, res) => {
   const t = tournaments.get(req.params.publicId);
-  if (!t || t.hostId !== req.host.id) return res.status(404).json({ error: 'Room not found.' });
+  if (!t || t.hostId !== req.authHost.id) return res.status(404).json({ error: 'Room not found.' });
   const base = String(process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
   const joinUrl = `${base}/join/${t.publicId}`;
   res.json({ joinUrl, dataUrl: await QRCode.toDataURL(joinUrl, { width: 340, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#10152b', light: '#ffffff' } }) });
 });
 app.get('/api/tournaments/:publicId', requireHost, (req, res) => {
   const t = tournaments.get(req.params.publicId);
-  if (!t || t.hostId !== req.host.id) return res.status(404).json({ error: 'Room not found or its server session has expired.' });
+  if (!t || t.hostId !== req.authHost.id) return res.status(404).json({ error: 'Room not found or its server session has expired.' });
   res.json(lobbyView(t));
 });
 app.post('/api/tournaments/:publicId/lock', requireHost, (req, res) => {
@@ -328,7 +328,7 @@ app.delete('/api/tournaments/:publicId/players/:playerId', requireHost, (req, re
 });
 function ownedTournament(req, res) {
   const t = tournaments.get(req.params.publicId);
-  if (!t || t.hostId !== req.host.id) { res.status(404).json({ error: 'Room not found.' }); return null; }
+  if (!t || t.hostId !== req.authHost.id) { res.status(404).json({ error: 'Room not found.' }); return null; }
   return t;
 }
 app.post('/api/join', (req, res) => {
@@ -357,16 +357,16 @@ app.get('/api/public-room/:publicId', (req, res) => {
   res.json({ publicId: t.publicId, roomCode: t.roomCode, status: t.status, locked: Boolean(t.locked), quizTitle: t.quizTitle, count: t.players.size, maxPlayers: t.settings.maxPlayers });
 });
 app.get('/api/results', requireHost, (req, res) => {
-  const tournamentsFound = db.prepare('SELECT t.id,t.room_code,t.status,t.created_at,t.completed_at,q.title quiz_title,t.results_json FROM tournaments t JOIN quizzes q ON q.id=t.quiz_id WHERE t.host_id=? AND t.status IN (\'complete\',\'active\',\'paused\',\'closed\',\'interrupted\') ORDER BY t.created_at DESC LIMIT 200').all(req.host.id);
+  const tournamentsFound = db.prepare('SELECT t.id,t.room_code,t.status,t.created_at,t.completed_at,q.title quiz_title,t.results_json FROM tournaments t JOIN quizzes q ON q.id=t.quiz_id WHERE t.host_id=? AND t.status IN (\'complete\',\'active\',\'paused\',\'closed\',\'interrupted\') ORDER BY t.created_at DESC LIMIT 200').all(req.authHost.id);
   const result = tournamentsFound.map(t => ({ ...t, results: t.results_json ? JSON.parse(t.results_json) : null, players: db.prepare('SELECT tp.id,tp.nickname,tp.character,tp.placement,tp.stats_json FROM tournament_players tp WHERE tournament_id=? ORDER BY placement').all(t.id).map(p => ({ ...p, stats: JSON.parse(p.stats_json) })) }));
   res.json(result);
 });
 app.get('/api/analytics', requireHost, (req, res) => {
-  const tournamentsRows = db.prepare('SELECT id,room_code,quiz_snapshot_json,created_at FROM tournaments WHERE host_id=?').all(req.host.id);
+  const tournamentsRows = db.prepare('SELECT id,room_code,quiz_snapshot_json,created_at FROM tournaments WHERE host_id=?').all(req.authHost.id);
   const tourMap = new Map(tournamentsRows.map(t => [t.id, t]));
   const attempts = db.prepare(`SELECT qa.tournament_id,qa.player_id,qa.question_id,qa.correct,qa.answered,qa.response_ms,qa.round_number,tp.nickname
     FROM question_attempts qa JOIN tournaments t ON t.id=qa.tournament_id JOIN tournament_players tp ON tp.id=qa.player_id
-    WHERE t.host_id=? ORDER BY qa.rowid`).all(req.host.id).map(a => {
+    WHERE t.host_id=? ORDER BY qa.rowid`).all(req.authHost.id).map(a => {
       const snapshot = JSON.parse(tourMap.get(a.tournament_id)?.quiz_snapshot_json || '[]');
       const q = snapshot.find(x => x.id === a.question_id);
       return { ...a, roomCode: tourMap.get(a.tournament_id)?.room_code, question: q?.question || 'Question from saved tournament snapshot', answers: q?.answers || [], correctAnswerIndex: q?.correctAnswerIndex ?? null };
@@ -378,12 +378,12 @@ app.get('/api/analytics', requireHost, (req, res) => {
     byQuestion.set(`${a.tournament_id}:${a.question_id}`,row);
   }
   const questionStats = [...byQuestion.values()].map(q => ({...q,accuracy:q.total?Math.round(100*q.correct/q.total):0,averageResponseMs:q.responseCount?Math.round(q.responseTotal/q.responseCount):null})).sort((a,b)=>a.accuracy-b.accuracy||b.total-a.total);
-  const students = db.prepare(`SELECT tp.id,tp.nickname,tp.placement,tp.stats_json,t.room_code FROM tournament_players tp JOIN tournaments t ON t.id=tp.tournament_id WHERE t.host_id=? AND t.status IN ('complete','active','paused','interrupted') ORDER BY t.created_at DESC`).all(req.host.id).map(p=>({...p,stats:JSON.parse(p.stats_json)}));
+  const students = db.prepare(`SELECT tp.id,tp.nickname,tp.placement,tp.stats_json,t.room_code FROM tournament_players tp JOIN tournaments t ON t.id=tp.tournament_id WHERE t.host_id=? AND t.status IN ('complete','active','paused','interrupted') ORDER BY t.created_at DESC`).all(req.authHost.id).map(p=>({...p,stats:JSON.parse(p.stats_json)}));
   const total=attempts.length, correct=attempts.filter(a=>a.correct).length;
   res.json({totalAttempts:total,correct,accuracy:total?Math.round(100*correct/total):0,averageResponseMs:attempts.filter(a=>a.response_ms!=null).length?Math.round(attempts.reduce((n,a)=>n+(a.response_ms||0),0)/attempts.filter(a=>a.response_ms!=null).length):null,questionStats,students,attempts});
 });
 app.get('/api/results/:tournamentId/export.csv', requireHost, (req, res) => {
-  const tour = db.prepare('SELECT * FROM tournaments WHERE id=? AND host_id=?').get(req.params.tournamentId, req.host.id);
+  const tour = db.prepare('SELECT * FROM tournaments WHERE id=? AND host_id=?').get(req.params.tournamentId, req.authHost.id);
   if (!tour) return res.status(404).json({ error: 'Tournament results not found.' });
   const rows = db.prepare(`SELECT tp.nickname,tp.placement,qa.question_id,qa.correct,qa.response_ms,qa.round_number
     FROM tournament_players tp LEFT JOIN question_attempts qa ON qa.player_id=tp.id AND qa.tournament_id=tp.tournament_id
