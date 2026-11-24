@@ -23,7 +23,7 @@ Only **Survival Quiz** is playable. Robot Duel, Quiz Royale, Co-op Boss Battle, 
 - A compiler toolchain for `better-sqlite3` if a prebuilt binary is not available for your platform.
 - A persistent writable directory for SQLite in production.
 
-The checked-in dependency manifest is `package.json`. Run `npm install` to resolve dependencies and generate a local `package-lock.json` for repeat installs. This project was authored in an environment without Node.js/npm, so that generated lock file and executable build/test results could not be produced here.
+The dependency manifest and lockfile (`package.json` and `package-lock.json`) are checked in. Use `npm ci` for a reproducible install from the committed lockfile.
 
 ## Run locally
 
@@ -57,7 +57,7 @@ For production-style local serving, run `npm run build` followed by `npm start`.
 
 SQLite opens at `DATABASE_PATH`, defaulting to `./data/qba.sqlite`. On startup, the service applies numbered SQL migrations from `db/migrations/` and inserts the seed quiz template if it is not present. `npm run db:seed` can apply the initial migration and seed template explicitly.
 
-The host session token is random and only its HMAC digest is stored. In production set `SESSION_SECRET`; the application refuses to start with a short production secret. Host registration is open by default so the first administrator can register. After creating the host account, set `ALLOW_REGISTRATION=false` and redeploy.
+The host session token is random and only its HMAC digest is stored. Set a unique production `SESSION_SECRET`. **Known issue:** the current server falls back to a fixed development secret when the variable is missing, and its length check can accept that fallback; see BUG-001 in `docs/BUG_TRACKER.md`. The Render blueprint requests a generated value, but the deployed setting still needs to be checked. Host registration is open by default so the first administrator can register. After creating the host account, set `ALLOW_REGISTRATION=false` and redeploy.
 
 ## GitHub setup
 
@@ -74,7 +74,7 @@ git push -u origin main
 
 Replace the repository URL with the empty repository you created. Do not commit `.env`, database files, host credentials, or service secrets.
 
-## Railway deployment
+## Railway alternative (not the current production target)
 
 The repository includes `Dockerfile` and `railway.json`. Railway builds one Node service, serves the Vite build and Socket.IO from it, binds `0.0.0.0:$PORT`, and checks `/api/health`.
 
@@ -99,7 +99,7 @@ The repository includes `Dockerfile` and `railway.json`. Railway builds one Node
 
 Railway volumes are attached to a service at runtime; data written during image builds is not persisted. Keep the service at one replica because active tournament state is held in that Node process and SQLite is on one volume. Railway plan and volume costs depend on the current account and usage; check the provider’s current pricing before deployment.
 
-## Render alternative
+## Render production target
 
 `render.yaml` defines a Docker web service, `/api/health` check, generated session secret, and a 1 GB disk mounted at `/var/data`. Set `PUBLIC_BASE_URL` to the final `https://<service>.onrender.com` URL in the Render dashboard. The service uses `DATABASE_PATH=/var/data/qba.sqlite`.
 
@@ -123,9 +123,15 @@ Do not scale this service to multiple independent instances. There is no distrib
 
 Students do not provide emails or accounts. Their nickname, selected character, question attempts, and tournament results are saved with the host’s tournament. Hosts can export results as CSV. Quiz edits after a tournament starts do not change that tournament’s frozen question snapshot. Closed and abandoned room state is cleaned from memory; saved quiz records and completed results remain in SQLite.
 
-## Test status
+## Latest verification
 
-Automated unit and live Socket.IO tests are included. They have **not been executed in this workspace** because Node.js and npm are unavailable here. No real-device browser test, cloud deploy, or concurrent load test has been run, so no browser compatibility or participant capacity claim is made.
+Audit baseline: `d7b2339c84d47060b3f39ac6d03d3f254e4e4a64` (2026-11-24).
+
+- `node test/core.test.js`: passed, 7 tests.
+- `npm run build`: passed; Vite reports a 1.93 MB minified JavaScript chunk (486 KB gzip), above its 500 KB warning threshold.
+- `npm test`: blocked at the Socket.IO integration test because this execution environment denies local TCP binds (`EPERM`); the test times out waiting for `/api/health`. Run it in the developer's WSL environment for network verification.
+- `npm audit --json`: blocked because the npm registry could not be resolved (`EAI_AGAIN`). Current dependency advisories are unknown.
+- Browser automation, physical devices, Render deployment/storage, and concurrent load have not been tested. No compatibility or participant-capacity claim is made.
 
 ## Troubleshooting
 
