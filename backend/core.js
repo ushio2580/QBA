@@ -62,6 +62,34 @@ export function pairPlayers(ids, random = Math.random) {
   return { pairs, byes };
 }
 
+export function buildBracketRounds(bracket, players) {
+  const byRound = new Map();
+  for (const row of Array.isArray(bracket) ? bracket : []) {
+    if (!row) continue;
+    const round = Number(row.round);
+    if (!Number.isInteger(round) || round < 1) continue;
+    const matches = byRound.get(round) || [];
+    const playerIds = Array.isArray(row.players) ? row.players : [];
+    matches.push({
+      id: row.id,
+      round,
+      players: playerIds.map(id => {
+        const player = players?.get?.(id);
+        return player ? { id, nickname: player.nickname } : null;
+      }).filter(Boolean),
+      winner: row.winnerId ? {
+        id: row.winnerId,
+        nickname: players?.get?.(row.winnerId)?.nickname
+      } : null,
+      status: row.status || 'pending'
+    });
+    byRound.set(round, matches);
+  }
+  return [...byRound.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, matches]) => matches);
+}
+
 export function comparePlayers(a, b) {
   if (a.alive !== b.alive) return a.alive ? 1 : -1;
   if (a.correct !== b.correct) return Math.sign(a.correct - b.correct);

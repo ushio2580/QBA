@@ -10,7 +10,7 @@ import Database from 'better-sqlite3';
 import rateLimit from 'express-rate-limit';
 import QRCode from 'qrcode';
 import { Server } from 'socket.io';
-import { CHARACTERS, validateQuestion, validateQuiz, pairPlayers, comparePlayers, publicQuestion } from './core.js';
+import { CHARACTERS, validateQuestion, validateQuiz, pairPlayers, comparePlayers, publicQuestion, buildBracketRounds } from './core.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dbFile = path.resolve(process.env.DATABASE_PATH || path.join(root, 'data/qba.sqlite'));
@@ -42,6 +42,7 @@ if(process.env.NODE_ENV==='production'&&SESSION_SECRET.length<32)throw new Error
 const tournaments = new Map();
 const playerTokenIndex = new Map();
 const socketInputTimes = new Map();
+const socketActionTimes = new Map();
 
 const sha = value => createHmac('sha256',SESSION_SECRET).update(value).digest('hex');
 const parseCookies = request => Object.fromEntries((request.headers.cookie || '').split(';').map(s => s.trim()).filter(Boolean).map(s => {
@@ -460,6 +461,30 @@ io.on('connection', socket => {
     player.lastInputSeq = seq;
     player.input = { x: Math.max(-1, Math.min(1, x)), y: Math.max(-1, Math.min(1, y)), dash: input?.dash === true, ability: input?.ability === true, seq };
   });
+  socket.on('game:action', ({ type } = {}) => {
+    const d = socket.data;
+    if (d.role !== 'player' || !['dash', 'shield'].includes(type)) return;
+    const cutoff = now() - 1000;
+    const recent = (socketActionTimes.get(socket.id) || []).filter(stamp => stamp > cutoff);
+    if (recent.length >= 6) return;
+    recent.push(now()); socketActionTimes.set(socket.id, recent);
+    const t = tournaments.get(d.publicId);
+    const player = t?.players.get(d.playerId);
+    const game = t?.matchById.get(player?.matchId);
+    const state = game?.players.get(d.playerId);
+    if (!player || !game || !state || game.status !== 'active' || game.phase !== 'ACTIVE' || !state.alive || state.lockedAnswer !== null) return;
+    const current = now();
+    if (type === 'dash') {
+      if (current < state.dashUntil) return socket.emit('game:action:rejected', { type, message: 'Dash is recharging.' });
+      state.dashUntil = current + 2200;
+      state.dashActiveUntil = current + 220;
+    } else {
+      if (current < state.abilityCooldownUntil) return socket.emit('game:action:rejected', { type, message: 'Shield is recharging.' });
+      state.abilityCooldownUntil = current + 6000;
+      state.shieldUntil = current + 4500;
+    }
+    publishOne(t, game, player);
+  });
   socket.on('host:start', () => {
     const d = socket.data, t = tournaments.get(d.publicId);
     if (!t || d.role !== 'host' || t.hostId !== d.hostId) return socket.emit('room:error', { error: 'Host authorization failed.' });
@@ -510,6 +535,7 @@ io.on('connection', socket => {
   });
   socket.on('disconnect', () => {
     socketInputTimes.delete(socket.id);
+    socketActionTimes.delete(socket.id);
     const d = socket.data;
     const t = tournaments.get(d.publicId);
     if (d.role === 'host' && t?.hostSocket === socket.id) t.hostSocket = null;
@@ -819,6 +845,7 @@ function socketEmitPlayer(player, event, game) {
   }
 }
 function gamePublicState(t, game, forPlayerId = null) {
+  const current = now();
   const self = game.players.get(forPlayerId);
   const players = game.playerIds.map(id => {
     const p = t.players.get(id), s = game.players.get(id);
@@ -829,34 +856,38 @@ function gamePublicState(t, game, forPlayerId = null) {
     const obscured = Boolean(opponent && t.settings.antiCopy && !confirmed && game.phase === 'ACTIVE' && nearAnswerZone);
     const x = hidden ? null : obscured ? Math.round(s.x / 80) * 80 : s?.x;
     const y = hidden ? null : obscured ? Math.round(s.y / 80) * 80 : s?.y;
-    return { id, nickname:p?.nickname, x, y, obscured, hp:s?.hp, maxHp:s?.maxHp, correct:s?.correct, alive:s?.alive, locked:s?.lockedAnswer!==null };
+    return { id, nickname:p?.nickname, x, y, obscured, hp:s?.hp, maxHp:s?.maxHp, correct:s?.correct, alive:s?.alive, locked:s?.lockedAnswer!==null,
+      shielded:current<(s?.shieldUntil||0), dashing:current<(s?.dashActiveUntil||0) };
   });
   const zones = forPlayerId ? (game.zoneMap.get(forPlayerId) || []) : [];
   const hazards=game.hazards.map(h=>{const phase=(now()-h.epoch+6500)%6500;return{id:h.id,x:h.x,y:h.y,warning:phase<1200,active:phase>=1200&&phase<3100};});
   return { matchId:game.id,round:game.round,phase:game.phase,endsAt:game.endsAt,questionNumber:game.questionIndex+1,total:game.questions.length,
     world:{width:960,height:540},players,enemies:game.enemies.map(e => ({id:e.id,x:Math.round(e.x),y:Math.round(e.y)})),hazards,zones,
     feedback:game.feedback,question:game.question ? {question:game.question.question,answers:[...game.question.answers],timeLimit:game.question.timeLimit} : null,
-    self:{id:forPlayerId,x:self?.x,y:self?.y,hp:self?.hp,maxHp:self?.maxHp,correct:self?.correct,locked:self?.lockedAnswer!==null,alive:self?.alive,dashReady:now()>=(self?.dashUntil||0)} };
+    self:{id:forPlayerId,x:self?.x,y:self?.y,hp:self?.hp,maxHp:self?.maxHp,correct:self?.correct,locked:self?.lockedAnswer!==null,alive:self?.alive,
+      dashReady:current>=(self?.dashUntil||0),dashCooldownMs:Math.max(0,(self?.dashUntil||0)-current),
+      abilityReady:current>=(self?.abilityCooldownUntil||0),abilityCooldownMs:Math.max(0,(self?.abilityCooldownUntil||0)-current),
+      shielded:current<(self?.shieldUntil||0),shieldMs:Math.max(0,(self?.shieldUntil||0)-current),dashing:current<(self?.dashActiveUntil||0)} };
 }
 function publishOne(t, game, player) { if (player.socketId) io.to(player.socketId).emit('game:state', gamePublicState(t,game,player.id)); }
 function publishGame(t, game) {
   for (const id of game.playerIds) { const p=t.players.get(id); if (p?.socketId) publishOne(t,game,p); }
   if (now() >= (game.nextPreviewAt || 0)) {
     game.nextPreviewAt = now() + 500;
-    const preview = { matchId:game.id,round:game.round,phase:game.phase,endsAt:game.endsAt,question:game.question?.question||null,players:game.playerIds.map(id=>{const p=t.players.get(id),s=game.players.get(id);return{id,nickname:p?.nickname,hp:s?.hp,maxHp:s?.maxHp,x:s?.x,y:s?.y,alive:s?.alive,correct:s?.correct};}),enemies:game.enemies.map(e=>({x:e.x,y:e.y})) };
+    const preview = { matchId:game.id,round:game.round,phase:game.phase,endsAt:game.endsAt,winnerId:game.winnerId||null,question:game.question?.question||null,players:game.playerIds.map(id=>{const p=t.players.get(id),s=game.players.get(id);return{id,nickname:p?.nickname,hp:s?.hp,maxHp:s?.maxHp,x:s?.x,y:s?.y,alive:s?.alive,correct:s?.correct,shielded:now()<(s?.shieldUntil||0),dashing:now()<(s?.dashActiveUntil||0)};}),enemies:game.enemies.map(e=>({x:e.x,y:e.y})),hazards:game.hazards.map(h=>{const phase=(now()-h.epoch+6500)%6500;return{x:h.x,y:h.y,warning:phase<1200,active:phase>=1200&&phase<3100};}) };
     if (t.hostSocket) io.to(t.hostSocket).emit('battle:preview', preview);
     for (const spectator of io.sockets.sockets.values()) if (spectator.data.role === 'spectator' && spectator.data.publicId === t.publicId) spectator.emit('battle:preview', preview);
   }
 }
 function emitHostSnapshots(t, targetSocket = null) {
   const games=[...t.matchById.values()].filter(g=>g.status==='active');
-  const payload=games.map(g=>({matchId:g.id,round:g.round,phase:g.phase,endsAt:g.endsAt,question:g.question?.question||null,players:g.playerIds.map(id=>{const p=t.players.get(id),s=g.players.get(id);return{id,nickname:p?.nickname,x:s?.x,y:s?.y,hp:s?.hp,maxHp:s?.maxHp,correct:s?.correct};}),enemies:g.enemies.map(e=>({x:e.x,y:e.y}))}));
+  const payload=games.map(g=>({matchId:g.id,round:g.round,phase:g.phase,endsAt:g.endsAt,question:g.question?.question||null,players:g.playerIds.map(id=>{const p=t.players.get(id),s=g.players.get(id);return{id,nickname:p?.nickname,x:s?.x,y:s?.y,hp:s?.hp,maxHp:s?.maxHp,correct:s?.correct,shielded:now()<(s?.shieldUntil||0),dashing:now()<(s?.dashActiveUntil||0)};}),enemies:g.enemies.map(e=>({x:e.x,y:e.y})),hazards:g.hazards.map(h=>{const phase=(now()-h.epoch+6500)%6500;return{x:h.x,y:h.y,warning:phase<1200,active:phase>=1200&&phase<3100};})}));
   if (targetSocket) targetSocket.emit('spectator:snapshots',payload); else if(t.hostSocket)io.to(t.hostSocket).emit('spectator:snapshots',payload);
 }
 function bracketView(t) {
   return { status:t.status,round:t.round,paused:t.paused,champion:t.status==='complete' ? t.bracket?.flatMap(r=>r.winnerId?[r.winnerId]:[]).at(-1) : null,
     players:[...t.players.values()].map(p=>({id:p.id,nickname:p.nickname,connected:p.connected,correct:p.correct})),
-    rounds:(t.bracket||[]).reduce((a,r)=>{(a[r.round] ||= []).push({id:r.id,round:r.round,players:r.players.map(id=>({id,nickname:t.players.get(id)?.nickname})),winner:r.winnerId?{id:r.winnerId,nickname:t.players.get(r.winnerId)?.nickname}:null,status:r.status});return a;},[]) };
+    rounds:buildBracketRounds(t.bracket,t.players) };
 }
 
 setInterval(() => {

@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 
 const COLORS = { cyan: 0x55e8df, pink: 0xff6196, purple: 0x9b87ff, gold: 0xffc857, green: 0x61e294, white: 0xf4f6ff, muted: 0x8690b3 };
 const avatarColors = ['#55e8df','#ff6196','#9b87ff','#ffc857','#61e294','#ff8d55','#6da6ff','#ef78ff'];
-const gameRuntime = { state: null, question: null, scene: null, socket: null, keys: null, seq: 0, dashPressed: false, abilityPressed: false, moveInput: { active:false,x:0,y:0 }, target: null };
+const gameRuntime = { state: null, question: null, scene: null, socket: null, keys: null, seq: 0, moveInput: { active:false,x:0,y:0 }, target: null };
 
 export function startArena(container, socket, handlers = {}) {
   gameRuntime.socket = socket; gameRuntime.handlers = handlers; gameRuntime.state = null; gameRuntime.question = null; gameRuntime.moveInput = { active:false,x:0,y:0 };
@@ -67,6 +67,8 @@ export function startArena(container, socket, handlers = {}) {
         g.fillStyle(0xffffff,.95);g.fillCircle(p.x-5,p.y-2,2);g.fillCircle(p.x+5,p.y-2,2);
         g.fillStyle(0x18213b,1);g.fillRoundedRect(p.x-22,p.y+22,44,5,3);
         g.fillStyle(p.hp<35?0xff5573:0x61e294,1);g.fillRoundedRect(p.x-22,p.y+22,44*Math.max(0,p.hp/p.maxHp),5,3);
+        if(p.shielded){g.lineStyle(3,0x9befff,.94);g.strokeCircle(p.x,p.y,25);g.lineStyle(1,0xffffff,.75);g.strokeCircle(p.x,p.y,30);}
+        if(p.dashing){g.lineStyle(5,color,.48);g.lineBetween(p.x-20,p.y+18,p.x-38,p.y+30);}
         if(p.locked){g.lineStyle(3,0xffffff,.85);g.strokeCircle(p.x,p.y,23);}
         nameplate?.setPosition(p.x,p.y-23).setText(String(p.nickname||`Player ${i+1}`).slice(0,20)).setAlpha(visibility).setVisible(true);
       });
@@ -76,10 +78,11 @@ export function startArena(container, socket, handlers = {}) {
         const key=this.keys||{};
         let ax=(key.D?.isDown||key.RIGHT?.isDown?1:0)-(key.A?.isDown||key.LEFT?.isDown?1:0);
         let ay=(key.S?.isDown||key.DOWN?.isDown?1:0)-(key.W?.isDown||key.UP?.isDown?1:0);
+        if(Phaser.Input.Keyboard.JustDown(key.SPACE))sendAction('dash');
+        if(Phaser.Input.Keyboard.JustDown(key.E))sendAction('shield');
         if(gameRuntime.moveInput.active){ax=gameRuntime.moveInput.x;ay=gameRuntime.moveInput.y;}
         if(ax||ay){const mag=Math.hypot(ax,ay);ax/=Math.max(1,mag);ay/=Math.max(1,mag);}
-        const dash=Boolean(key.SPACE?.isDown||gameRuntime.dashPressed),ability=Boolean(key.E?.isDown||gameRuntime.abilityPressed);
-        if(time-(this.lastInput||0)>49){gameRuntime.seq++;gameRuntime.socket?.emit('game:input',{x:ax,y:ay,dash,ability,seq:gameRuntime.seq});this.lastInput=time;gameRuntime.dashPressed=false;gameRuntime.abilityPressed=false;}
+        if(time-(this.lastInput||0)>49){gameRuntime.seq++;gameRuntime.socket?.emit('game:input',{x:ax,y:ay,seq:gameRuntime.seq});this.lastInput=time;}
       }
     }
   };
@@ -89,5 +92,9 @@ export function startArena(container, socket, handlers = {}) {
 
 export function setMoveInput(x,y){gameRuntime.moveInput={active:true,x:Math.max(-1,Math.min(1,Number(x)||0)),y:Math.max(-1,Math.min(1,Number(y)||0))};}
 export function resetMoveInput(){gameRuntime.moveInput={active:false,x:0,y:0};}
-export function pressDash(){gameRuntime.dashPressed=true;}
-export function pressAbility(){gameRuntime.abilityPressed=true;}
+function sendAction(type){
+  if(gameRuntime.state?.phase!=='ACTIVE'||gameRuntime.state?.self?.locked)return;
+  gameRuntime.socket?.emit('game:action',{type});
+}
+export function pressDash(){sendAction('dash');}
+export function pressAbility(){sendAction('shield');}

@@ -61,8 +61,11 @@ test('two independent Socket.IO players receive a server-run Survival Quiz arena
   await Promise.all([readyA,readyB]);
   const stateA=eventOnce(a,'game:state',state=>state.phase==='ACTIVE'&&Boolean(state.question));
   const stateB=eventOnce(b,'game:state',state=>state.phase==='ACTIVE'&&Boolean(state.question));
+  const bracketState=eventOnce(host,'tournament:state',state=>state.status==='active');
   host.emit('host:start');
-  const [aState,bState]=await Promise.all([stateA,stateB]);
+  const [aState,bState,bracket]=await Promise.all([stateA,stateB,bracketState]);
+  assert.equal(bracket.rounds.length,1,'first round has no sparse null entry');
+  assert.ok(Array.isArray(bracket.rounds[0]),'bracket rounds serialize as arrays');
   const activeRoomsResponse=await fetch(`${base}/api/tournaments`,{headers:{Cookie:cookie}});
   const activeRooms=await activeRoomsResponse.json();
   assert.equal(activeRooms[0]?.publicId,room.data.publicId,'a host can recover their live room after navigating away');
@@ -72,6 +75,14 @@ test('two independent Socket.IO players receive a server-run Survival Quiz arena
   const rival=aState.players.find(player=>player.id!==aState.self.id);
   assert.equal(typeof rival?.x,'number','the active player can see the rival outside an answer zone');
   assert.equal(typeof rival?.y,'number','the rival position is synchronized during the battle');
+  const dashState=eventOnce(a,'game:state',state=>state.self?.dashing===true);
+  a.emit('game:action',{type:'dash'});
+  const dashed=await dashState;
+  assert.equal(dashed.self.dashReady,false,'dash activation and cooldown are confirmed by the server');
+  const shieldState=eventOnce(a,'game:state',state=>state.self?.shielded===true);
+  a.emit('game:action',{type:'shield'});
+  const shielded=await shieldState;
+  assert.equal(shielded.self.abilityReady,false,'shield activation and cooldown are confirmed by the server');
   const startX=aState.self.x;
   for(let seq=1;seq<=6;seq++)a.emit('game:input',{x:1,y:0,seq});
   const moved=await eventOnce(a,'game:state',state=>state.phase==='ACTIVE'&&state.self.x>startX+12);

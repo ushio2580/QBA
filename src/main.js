@@ -1,12 +1,13 @@
 import { io } from 'socket.io-client';
 import * as XLSX from 'xlsx';
+import { normalizeBracketRounds } from './bracket.js';
 import { startArena, setMoveInput, resetMoveInput, pressDash, pressAbility } from './game.js';
 import './style.css';
 
 const app=document.querySelector('#app');
 const characters=[['bot','Basic Bot'],['ninja','Cyber Ninja'],['explorer','Space Explorer'],['knight','Star Knight'],['alien','Alien'],['warrior','Mech Warrior'],['mage','Energy Mage'],['pixel','Pixel Survivor']];
 const colors=['#ff657f','#5bb6ff','#ffc857','#69e4a5'];
-let host=null,socket=null,activeRoom=null,playerPublicId=null,playerId=null,activeQuiz=null,arena=null,gameState=null,questionData=null,activeMatchId=null,currentView='home',hostMode='quizzes',roomTimer=null,featuredMatch=null,previewState=new Map(),bracketData=null,analyticsData=null,quizCache=[];
+let host=null,socket=null,activeRoom=null,playerPublicId=null,playerId=null,activeQuiz=null,arena=null,gameState=null,questionData=null,activeMatchId=null,currentView='home',hostMode='quizzes',roomTimer=null,featuredMatch=null,spectatorRoomId=null,previewState=new Map(),bracketData=null,analyticsData=null,quizCache=[];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const $=(sel,root=document)=>root.querySelector(sel);
 const $$=(sel,root=document)=>[...root.querySelectorAll(sel)];
@@ -207,6 +208,7 @@ function previewQuiz(){
 }
 
 async function renderHostLobby(publicId){
+  if(activeRoom?.publicId!==publicId){bracketData=null;previewState.clear();featuredMatch=null;spectatorRoomId=null;}
   activeRoom=await api(`/api/tournaments/${publicId}`);currentView='host-lobby';
   const qr=await api(`/api/tournaments/${publicId}/qr`);connectSocket();
   renderLobbyMarkup(activeRoom,qr);hostMode='quizzes';
@@ -219,8 +221,9 @@ function renderLobbyMarkup(room,qr){
 }
 function lobbyPlayer(p,i){return `<div class="lobby-player"><div class="player-avatar avatar-${i%6}">${['◈','✦','●','✧','◇','✺'][i%6]}</div><div><b>${esc(p.nickname)}</b><small>${esc(characters.find(c=>c[0]===p.character)?.[1]||'Basic Bot')}</small></div><span class="player-connection ${p.connected?'online':'offline'}">${p.connected?'● online':'○ reconnecting'}</span><button class="icon-button danger-text" title="Remove player" data-action="remove-player" data-id="${p.id}" ${activeRoom?.status!=='lobby'?'disabled':''}>×</button></div>`;}
 function renderBracket(data){
-  if(!data?.rounds?.length)return `<div class="bracket-empty"><span>⌘</span><p>Players will be paired automatically once the host starts the tournament.</p></div>`;
-  return `<div class="bracket-rounds">${data.rounds.map((round,i)=>`<div class="bracket-round"><div class="bracket-round-title">ROUND ${i+1}</div>${round.map(match=>`<article class="bracket-match ${match.status}">${match.players.map(p=>`<div class="bracket-player ${match.winner?.id===p.id?'winner':''}"><span>${esc(p.nickname)}</span><small>${match.winner?.id===p.id?'✓':match.status==='bye'?'BYE':''}</small></div>`).join('')}${match.status==='active'?'<div class="match-live">● LIVE MATCH</div>':''}</article>`).join('')}</div>`).join('')}</div>`;
+  const rounds=normalizeBracketRounds(data);
+  if(!rounds.length)return `<div class="bracket-empty"><span>⌘</span><p>Players will be paired automatically once the host starts the tournament.</p></div>`;
+  return `<div class="bracket-rounds">${rounds.map((round,i)=>`<div class="bracket-round"><div class="bracket-round-title">ROUND ${i+1}</div>${round.filter(Boolean).map(match=>{const players=Array.isArray(match.players)?match.players.filter(Boolean):[];return `<article class="bracket-match ${esc(match.status||'pending')}">${players.map(p=>`<div class="bracket-player ${match.winner?.id===p.id?'winner':''}"><span>${esc(p.nickname||'Player')}</span><small>${match.winner?.id===p.id?'✓':match.status==='bye'?'BYE':''}</small></div>`).join('')||'<div class="bracket-player"><span>Players pending</span></div>'}${match.status==='active'?'<div class="match-live">● LIVE MATCH</div>':''}</article>`;}).join('')}</div>`).join('')}</div>`;
 }
 async function handleLobbyClick(event){
   const b=event.target.closest('[data-action]');if(!b)return;
@@ -278,10 +281,10 @@ function connectSocket(playerToken=null){
   disconnectSocket();socket=io({transports:['websocket','polling'],reconnection:true,reconnectionAttempts:Infinity,auth:playerToken?{token:playerToken}:undefined});
   socket.on('connect',()=>{if(playerToken)socket.emit('player:attach',{token:playerToken});else if(activeRoom?.publicId&&host)socket.emit('host:attach',{publicId:activeRoom.publicId});});
   socket.on('room:error',data=>{const box=$('#lobby-error')||$('.form-error');if(box)box.textContent=data.error;else toast(data.error,'error');});
-  socket.on('room:lobby',room=>{updateLobby(room);if(currentView==='player-waiting')$('#waiting-bracket')&&( $('#waiting-bracket').innerHTML=renderBracket(bracketData));});
+  socket.on('room:lobby',room=>{updateLobby(room);if(currentView==='player-waiting')$('#waiting-bracket')&&( $('#waiting-bracket').innerHTML=renderBracket(bracketData));if(currentView==='spectator'){const round=$('#spectator-round');if(round)round.textContent=room.round||1;}});
   socket.on('player:ready',data=>{playerId=data.playerId;});
   socket.on('player:waiting',data=>{bracketData=data.bracket;renderPlayerWaiting();});
-  socket.on('tournament:state',data=>{bracketData=data;if(currentView==='host-lobby')$('#bracket-content')&&($('#bracket-content').innerHTML=renderBracket(data));if(currentView==='player-waiting')$('#waiting-bracket')&&($('#waiting-bracket').innerHTML=renderBracket(data));});
+  socket.on('tournament:state',data=>{const oldRound=bracketData?.round;bracketData=data;if(currentView==='spectator'&&oldRound&&data.round>oldRound){for(const [id,preview] of previewState)if(preview.round<data.round)previewState.delete(id);featuredMatch=null;renderSpectatorCards();}if(currentView==='host-lobby')$('#bracket-content')&&($('#bracket-content').innerHTML=renderBracket(data));if(currentView==='player-waiting')$('#waiting-bracket')&&($('#waiting-bracket').innerHTML=renderBracket(data));if(currentView==='spectator'){const target=$('#spectator-bracket #bracket-content');if(target)target.innerHTML=renderBracket(data);const round=$('#spectator-round');if(round)round.textContent=data.round||1;}});
   socket.on('game:question',data=>{questionData=data;});
   socket.on('game:state',state=>{
     if(state.matchId!==activeMatchId){$('.match-overlay')?.remove();questionData=null;}
@@ -290,19 +293,20 @@ function connectSocket(playerToken=null){
   });
   socket.on('game:locked',()=>toast('Answer locked. Nice move.','success'));
   socket.on('game:damage',data=>toast(`−${data.amount} HP`,'error'));
-  socket.on('match:result',result=>{if(result.matchId!==activeMatchId)return;showMatchResult(result);});
+  socket.on('match:result',result=>{const preview=previewState.get(result.matchId);if(preview){previewState.set(result.matchId,{...preview,phase:'COMPLETE',winnerId:result.winnerId});if(currentView==='spectator')renderSpectatorCards();}if(result.matchId!==activeMatchId)return;showMatchResult(result);});
+  socket.on('game:action:rejected',data=>toast(data.message||'Action is not ready yet.','error'));
   socket.on('tournament:complete',results=>showChampion(results));
   socket.on('tournament:paused',data=>{$('.pause-banner')?.remove();if(data.paused)app.insertAdjacentHTML('beforeend','<div class="pause-banner">Ⅱ TOURNAMENT PAUSED BY HOST</div>');});
   socket.on('tournament:closed',()=>{disconnectSocket();renderLanding();toast('The host closed this room.');});
   socket.on('room:removed',data=>{if(playerPublicId)localStorage.removeItem(`qba-player:${playerPublicId}`);localStorage.removeItem('qba:last-player');disconnectSocket();renderLanding();toast(data.reason,'error');});
-  socket.on('battle:preview',preview=>{previewState.set(preview.matchId,preview);if(currentView==='spectator')renderSpectatorCards();});
+  socket.on('battle:preview',preview=>{const previous=previewState.get(preview.matchId);previewState.set(preview.matchId,{...preview,winnerId:preview.winnerId||previous?.winnerId||null});if(currentView==='spectator')renderSpectatorCards();});
   socket.on('spectator:snapshots',snapshots=>{for(const s of snapshots)previewState.set(s.matchId,s);if(currentView==='spectator')renderSpectatorCards();});
   socket.on('disconnect',()=>{if(currentView.startsWith('player'))toast('Connection interrupted. Reconnecting…','error');});
 }
 function disconnectSocket(){if(socket){socket.removeAllListeners();socket.disconnect();socket=null;}if(arena){arena.destroy();arena=null;}gameState=null;activeMatchId=null;}
 function renderGame(){
   currentView='game';history.replaceState({},'','/game');
-  app.innerHTML=`<main class="game-screen"><header class="game-top"><div class="brand"><span class="brand-icon">Q<span>✦</span></span><span>QUIZ BATTLE <b>ARENA</b></span></div><div class="game-status"><span class="live-dot"></span> LIVE MATCH <b id="game-round">ROUND 1</b></div><button class="icon-button" data-action="game-help" title="Controls">?</button></header><section class="game-layout"><div class="game-hud"><div class="question-progress"><span id="question-index">QUESTION 1 / 3</span><span id="phase-label">GET READY</span></div><h1 id="game-question">Prepare to move into an answer zone.</h1><img id="question-image" class="question-image hidden" alt="Question illustration"><p id="game-subtitle">Stand in a zone for 0.75 seconds to lock in your answer.</p><div class="countdown-row"><div class="countdown-track"><span id="countdown-fill"></span></div><b id="countdown">—</b></div></div><div class="arena-wrap"><div id="phaser-root"></div><div class="arena-label">SURVIVAL ARENA <span>960 × 540</span></div><div class="virtual-joystick" id="move-joystick" role="application" aria-label="Touch joystick for movement"><span class="joystick-caption">MOVE</span><div class="joystick-base"><div class="joystick-knob"></div></div></div><div class="touch-controls"><button class="touch-button dash-button" id="dash-button"><span>⇧</span><small>DASH</small></button><button class="touch-button ability-button" id="ability-button"><span>◉</span><small>SHIELD</small></button></div><div class="move-hint">WASD / ARROWS <span>·</span> MOVE <span>·</span> SPACE DASH</div></div><div class="answers-grid" id="answers-grid"></div><div class="game-note"><span>⚡</span><span>Your rival stays visible while moving. Anti-copy softens their position near answer zones and hides it after they lock.</span></div></section></main>`;
+  app.innerHTML=`<main class="game-screen"><header class="game-top"><div class="brand"><span class="brand-icon">Q<span>✦</span></span><span>QUIZ BATTLE <b>ARENA</b></span></div><div class="game-status"><span class="live-dot"></span> LIVE MATCH <b id="game-round">ROUND 1</b></div><button class="icon-button" data-action="game-help" title="Controls">?</button></header><section class="game-layout"><div class="game-hud"><div class="question-progress"><span id="question-index">QUESTION 1 / 3</span><span id="phase-label">GET READY</span></div><h1 id="game-question">Prepare to move into an answer zone.</h1><img id="question-image" class="question-image hidden" alt="Question illustration"><p id="game-subtitle">Stand in a zone for 0.75 seconds to lock in your answer.</p><div class="countdown-row"><div class="countdown-track"><span id="countdown-fill"></span></div><b id="countdown">—</b></div></div><div class="arena-wrap"><div id="phaser-root"></div><div class="arena-label">SURVIVAL ARENA <span>960 × 540</span></div><div class="virtual-joystick" id="move-joystick" role="application" aria-label="Touch joystick for movement"><span class="joystick-caption">MOVE</span><div class="joystick-base"><div class="joystick-knob"></div></div></div><div class="touch-controls"><button class="touch-button dash-button" id="dash-button" aria-label="Dash, keyboard Space"><span>⇧</span><small id="dash-label">DASH</small></button><button class="touch-button ability-button" id="ability-button" aria-label="Shield, keyboard E"><span>◉</span><small id="ability-label">SHIELD</small></button></div><div class="move-hint">WASD / ARROWS <span>·</span> MOVE <span>·</span> SPACE DASH</div></div><div class="answers-grid" id="answers-grid"></div><div class="game-note"><span>⚡</span><span>Your rival stays visible while moving. Anti-copy softens their position near answer zones and hides it after they lock.</span></div></section></main>`;
   arena=startArena($('#phaser-root'),socket,{hud:updateGameHud});
   bindVirtualJoystick();
   $('#dash-button').addEventListener('pointerdown',e=>{e.preventDefault();pressDash();});$('#ability-button').addEventListener('pointerdown',e=>{e.preventDefault();pressAbility();});
@@ -345,6 +349,7 @@ function updateGameHud(state,remaining){
   const pct=state.phase==='ACTIVE'?Math.max(0,Math.min(100,ms/((state.question?.timeLimit||25)*1000)*100)):state.phase==='READING'?Math.max(0,Math.min(100,ms/((questionData?.readingSeconds||3)*1000)*100)):state.phase==='FEEDBACK'?100:0;
   $('#countdown-fill').style.width=`${pct}%`;$('#countdown-fill').classList.toggle('urgent',pct<25&&state.phase==='ACTIVE');
   const self=state.self;if(self&&self.hp<35)$('#game-question').classList.add('low-health');else $('#game-question').classList.remove('low-health');
+  if(self){const canAct=state.phase==='ACTIVE'&&!self.locked;const dash=$('#dash-button'),shield=$('#ability-button');if(dash){dash.disabled=!canAct||!self.dashReady;dash.classList.toggle('is-active',Boolean(self.dashing));$('#dash-label').textContent=self.dashReady?'DASH':`${Math.ceil((self.dashCooldownMs||0)/1000)}s`;}if(shield){shield.disabled=!canAct||!self.abilityReady;shield.classList.toggle('is-active',Boolean(self.shielded));$('#ability-label').textContent=self.shielded?'ACTIVE':self.abilityReady?'SHIELD':`${Math.ceil((self.abilityCooldownMs||0)/1000)}s`;}}
 }
 function showMatchResult(result){
   const winner=result.players.find(p=>p.id===result.winnerId);
@@ -366,19 +371,25 @@ function showHelp(){
 function showSpectator(publicId=activeRoom?.publicId){
   if(!socket)connectSocket();
   if(!publicId)return toast('Room details are unavailable.','error');
+  if(spectatorRoomId!==publicId){previewState.clear();featuredMatch=null;spectatorRoomId=publicId;}
   const hostWatching=Boolean(host&&activeRoom?.publicId===publicId);
   socket.emit('spectator:attach',{publicId});
   currentView='spectator';
-  app.innerHTML=`<main class="spectator-shell"><header class="lobby-topbar"><div class="brand"><span class="brand-icon">Q<span>✦</span></span><span>QUIZ BATTLE <b>ARENA</b></span></div><div class="room-live"><span class="live-dot"></span> PROJECTOR VIEW</div><button class="btn btn-outline" data-action="spectator-back">← ${hostWatching?'Back to host lobby':'Back to room'}</button><button class="btn btn-dark" data-action="fullscreen">⛶ Fullscreen</button></header><section class="spectator-header"><div><div class="eyebrow">ROUND ${activeRoom?.round||1} · LIVE ARENAS</div><h1>Classroom battle watch</h1><p>Live snapshots are display-only; the server remains authoritative.</p></div><div class="spectator-modes"><button class="selected" data-spectator-mode="multi">Multi-arena</button><button data-spectator-mode="bracket">Bracket</button></div></section><div class="spectator-grid" id="spectator-grid"></div><section class="panel spectator-bracket hidden" id="spectator-bracket"><div id="bracket-content">${renderBracket(bracketData)}</div></section></main>`;
+  app.innerHTML=`<main class="spectator-shell"><header class="lobby-topbar"><div class="brand"><span class="brand-icon">Q<span>✦</span></span><span>QUIZ BATTLE <b>ARENA</b></span></div><div class="room-live"><span class="live-dot"></span> PROJECTOR VIEW</div><button class="btn btn-outline" data-action="spectator-back">← ${hostWatching?'Back to host lobby':'Back to room'}</button><button class="btn btn-dark" data-action="fullscreen">⛶ Fullscreen</button></header><section class="spectator-header"><div><div class="eyebrow">ROUND <span id="spectator-round">${activeRoom?.round||1}</span> · LIVE ARENAS</div><h1>Classroom battle watch</h1><p>Choose an arena to enlarge it. Player choices stay hidden until each question resolves.</p></div><div class="spectator-modes"><button class="selected" data-spectator-mode="multi">Multi-arena</button><button data-spectator-mode="bracket">Bracket</button></div></section><div class="spectator-grid" id="spectator-grid"></div><section class="panel spectator-bracket hidden" id="spectator-bracket"><div id="bracket-content">${renderBracket(bracketData)}</div></section></main>`;
   renderSpectatorCards();
   $('.spectator-shell').addEventListener('click',e=>{const card=e.target.closest('[data-match]');if(card){featuredMatch=featuredMatch===card.dataset.match?null:card.dataset.match;renderSpectatorCards();return;}const b=e.target.closest('[data-action],[data-spectator-mode]');if(!b)return;if(b.dataset.action==='spectator-back'){if(hostWatching)return renderHostLobby(publicId);disconnectSocket();return renderJoin(publicId);}if(b.dataset.action==='fullscreen')document.documentElement.requestFullscreen?.();if(b.dataset.spectatorMode){$$('[data-spectator-mode]').forEach(x=>x.classList.toggle('selected',x===b));if(b.dataset.spectatorMode==='multi')featuredMatch=null;$('#spectator-grid').classList.toggle('hidden',b.dataset.spectatorMode==='bracket');$('#spectator-grid').classList.toggle('has-featured',Boolean(featuredMatch));$('#spectator-bracket').classList.toggle('hidden',b.dataset.spectatorMode!=='bracket');}});
 }
 function renderSpectatorCards(){
-  const grid=$('#spectator-grid');if(!grid)return;const previews=[...previewState.values()];
+  const grid=$('#spectator-grid');if(!grid)return;const previews=[...previewState.values()].filter(p=>p&&typeof p==='object');
   if(!previews.length){grid.innerHTML='<div class="empty-inline">Waiting for live arenas to start…</div>';return;}
   if(featuredMatch&&!previews.some(p=>p.matchId===featuredMatch))featuredMatch=null;
   grid.classList.toggle('has-featured',Boolean(featuredMatch));
-  grid.innerHTML=previews.map(p=>`<article class="spectator-card ${featuredMatch===p.matchId?'featured':''} ${featuredMatch&&featuredMatch!==p.matchId?'hidden':''}" data-match="${p.matchId}"><div class="spectator-card-head"><span>ROUND ${p.round}</span><b>${esc(p.phase)}</b><span class="live-dot"></span></div>${p.question?`<div class="spectator-question">${esc(p.question)}</div>`:''}<div class="mini-arena"><div class="mini-grid"></div>${(p.enemies||[]).map(e=>`<i class="mini-enemy" style="left:${e.x/9.6}%;top:${e.y/5.4}%"></i>`).join('')}${p.players.map((player,i)=>`<div class="mini-player" style="left:${player.x/9.6}%;top:${player.y/5.4}%;--player-color:${colors[i]}" title="${esc(player.nickname)}"></div>`).join('')}</div><div class="spectator-contestants">${p.players.map((player,i)=>`<div><span>${esc(player.nickname)}</span><b>${player.hp} HP</b><i><em style="width:${Math.max(0,player.hp/player.maxHp*100)}%;background:${colors[i]}"></em></i></div>`).join('')}</div></article>`).join('');
+  grid.innerHTML=previews.map(p=>{const players=Array.isArray(p.players)?p.players.filter(Boolean):[];const enemies=Array.isArray(p.enemies)?p.enemies.filter(Boolean):[];const winner=players.find(player=>player.id===p.winnerId);const complete=p.phase==='COMPLETE';return `<article class="spectator-card ${complete?'completed':''} ${featuredMatch===p.matchId?'featured':''} ${featuredMatch&&featuredMatch!==p.matchId?'hidden':''}" data-match="${esc(p.matchId||'')}"><div class="spectator-card-head"><span>ROUND ${Number(p.round)||1}</span><b>${complete?`FINAL · ${esc(winner?.nickname||'Match complete')}`:esc(p.phase||'LIVE')}</b>${complete?'<span class="match-done">✓</span>':'<span class="live-dot"></span>'}</div>${p.question?`<div class="spectator-question">${esc(p.question)}</div>`:''}${renderPreviewArena(p,enemies,players)}<div class="spectator-contestants">${players.map((player,i)=>`<div><span>${esc(player.nickname||'Player')}</span><b>${Math.max(0,Number(player.hp)||0)} HP</b><i><em style="width:${Math.max(0,Math.min(100,(Number(player.hp)||0)/(Number(player.maxHp)||100)*100))}%;background:${colors[i%colors.length]}"></em></i></div>`).join('')}</div></article>`;}).join('');
+}
+function renderPreviewArena(preview,enemies,players){
+  const pct=(value,max)=>Math.max(0,Math.min(100,(Number(value)||0)/max*100));
+  const hazards=Array.isArray(preview.hazards)?preview.hazards.filter(Boolean):[];
+  return `<div class="mini-arena"><div class="mini-grid"></div>${hazards.map(h=>`<i class="mini-hazard ${h.active?'active':''} ${h.warning?'warning':''}" style="left:${pct(h.x,960)}%;top:${pct(h.y,540)}%"></i>`).join('')}${enemies.map(e=>`<i class="mini-enemy" style="left:${pct(e.x,960)}%;top:${pct(e.y,540)}%"></i>`).join('')}${players.map((player,i)=>player.x==null||player.y==null?'':`<div class="mini-player ${player.shielded?'shielded':''} ${player.dashing?'dashing':''}" style="left:${pct(player.x,960)}%;top:${pct(player.y,540)}%;--player-color:${colors[i%colors.length]}" title="${esc(player.nickname||'Player')}"><span>${esc((player.nickname||'P').slice(0,10))}</span></div>`).join('')}</div>`;
 }
 
 function renderAccessibility(){

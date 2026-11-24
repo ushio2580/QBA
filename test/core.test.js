@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { validateQuestion, validateQuiz, pairPlayers, comparePlayers } from '../backend/core.js';
+import { validateQuestion, validateQuiz, pairPlayers, comparePlayers, buildBracketRounds } from '../backend/core.js';
+import { normalizeBracketRounds } from '../src/bracket.js';
 
 const question = { question: '2 + 2?', answers: ['3', '4'], correctAnswerIndex: 1, timeLimit: 15 };
 
@@ -24,6 +25,27 @@ test('pairing covers even and odd rosters without duplicates', () => {
   const odd = pairPlayers(['a', 'b', 'c'], () => 0.5);
   assert.equal(odd.pairs.length, 1);
   assert.equal(odd.byes.length, 1);
+});
+
+test('bracket rounds are dense, ordered, and safe to serialize when rounds are numbered from one', () => {
+  const players = new Map([['a', { nickname: 'Ada' }], ['b', { nickname: 'Lin' }], ['c', { nickname: 'Grace' }]]);
+  const rounds = buildBracketRounds([
+    { id: 'm1', round: 1, players: ['a', 'b'], winnerId: null, status: 'active' },
+    { id: 'bye', round: 1, players: ['c'], winnerId: 'c', status: 'bye' },
+    { id: 'm2', round: 2, players: ['c', 'a'], winnerId: 'c', status: 'complete' }
+  ], players);
+  assert.equal(rounds.length, 2);
+  assert.ok(rounds.every(Array.isArray));
+  assert.equal(JSON.parse(JSON.stringify(rounds))[0][0].players[0].nickname, 'Ada');
+  assert.equal(rounds[1][0].winner.nickname, 'Grace');
+});
+
+test('bracket rendering input skips sparse null rounds and malformed player lists', () => {
+  const data=JSON.parse('{"rounds":[null,[null,{"id":"m1","status":"active","players":null}]]}');
+  const rounds=normalizeBracketRounds(data);
+  assert.equal(rounds.length,1);
+  assert.equal(rounds[0].length,1);
+  assert.deepEqual(rounds[0][0].players,[]);
 });
 
 test('winner tie breakers favor accuracy then health then response time', () => {
