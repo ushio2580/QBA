@@ -29,7 +29,7 @@ test('pairing covers even and odd rosters without duplicates', () => {
 test('winner tie breakers favor accuracy then health then response time', () => {
   assert.equal(comparePlayers({ alive: true, correct: 2, hp: 5 }, { alive: true, correct: 1, hp: 90 }), 1);
   assert.equal(comparePlayers({ alive: true, correct: 2, hp: 80 }, { alive: true, correct: 2, hp: 60 }), 1);
-  assert.equal(comparePlayers({ alive: true, correct: 2, hp: 80, responseTotal: 7000 }, { alive: true, correct: 2, hp: 80, responseTotal: 5000 }), 1);
+  assert.equal(comparePlayers({ alive: true, correct: 2, hp: 80, responseTotal: 7000 }, { alive: true, correct: 2, hp: 80, responseTotal: 5000 }), -1);
 });
 
 test('demo quiz remains editable data with at least 30 valid questions', () => {
